@@ -12,6 +12,7 @@ The design, every decision (D1–D13) and the reason for each are in `docs/DESIG
 | `cmd/fake-makemkvcon`, `cmd/fake-radarr` | stand-ins for running the app without a drive or Radarr (README: "Try it without a drive") |
 | `internal/makemkv` | robot-output parser, the runner (`Info`, `Rip`) and the rip watchdog; the only package that knows MakeMKV |
 | `internal/makemkv/fake` | the fake makemkvcon (scenarios in the `FAKE_MAKEMKVCON` JSON variable) |
+| `internal/makemkv/install` | the first-start installer for `makemkvcon`, the key writer, and the MakeMKV pin (`pin.env`, the signed checksum file, the signing key) |
 | `internal/jobs` | job states (a transition table), the engine, and the `Store` and `Steps` interfaces it needs |
 | `internal/store` | SQLite (pure-Go driver), migrations in `migrations/*.sql` |
 | `internal/steps` | the real `jobs.Steps`: scan, check disc, select, rip, verify, import |
@@ -24,6 +25,9 @@ The design, every decision (D1–D13) and the reason for each are in `docs/DESIG
 | `internal/web` | server-rendered UI (`html/template` + vendored htmx), Basic auth, health endpoints |
 | `internal/format` | shared size and length formatting |
 | `testdata/makemkv` | robot-output scans used by tests and the demo |
+| `Dockerfile`, `deploy/` | the image, and the compose example with its notes |
+| `scripts/update-makemkv-pin.sh` | pins a MakeMKV release after checking its signature; the weekly workflow runs it |
+| `.github/workflows` | CI, the release (tag → signed multi-arch image), the MakeMKV update check |
 
 ## Build and test
 
@@ -53,7 +57,8 @@ gofmt -l .                       # must print nothing
   - A partial unique index allows one active job per drive.
 - **Never make Radarr download anything.** Movies are added unmonitored, with no search, and the client enforces it.
 - **Secrets** come from environment variables or `*_FILE` files. They never appear in URLs, logs or error messages; the Radarr key goes in a header.
-- **MakeMKV is never bundled** in the repo or the image. It is installed at first start, after the user accepts its EULA (decision D6).
+- **MakeMKV's proprietary part is never bundled** in the repo or the image. `makemkvcon` is installed at first start, after the user accepts its EULA (decisions D6, D14). Only the open-source `makemkv-oss` libraries are built into the image.
+- **The MakeMKV pin changes only through `scripts/update-makemkv-pin.sh`,** which checks the signature. `TestPinMatchesSignedFile` fails if `pin.env`, the signed file and the key disagree.
 - **Web UI.**
   - Nothing inline (no scripts, no `style=`): the Content-Security-Policy forbids it.
   - Changes need same-origin requests.

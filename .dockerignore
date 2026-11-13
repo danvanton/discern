@@ -1,0 +1,14 @@
+# Only what the build needs goes into the build context. Patterns without a
+# slash match at the top level only, so *.md leaves internal/web/static's
+# THIRD_PARTY.md (embedded in the binary) in the context.
+.git
+.github
+bin
+dist
+dev
+config
+docs
+deploy
+*.md
+.env
+*.env

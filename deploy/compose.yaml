@@ -1,0 +1,83 @@
+# Discern with Docker Compose. Copy this file, change the values marked
+# CHANGE, put the three secrets in ./secrets/, then `docker compose up -d`.
+# Notes for TrueNAS SCALE and how to find the values: deploy/README.md.
+
+services:
+  discern:
+    image: ghcr.io/notnad/discern:0.1
+    restart: unless-stopped
+
+    # Run as the user that owns your media folders (CHANGE), so Radarr can
+    # move the rips Discern leaves in staging. `id <user>` on the host shows
+    # the numbers.
+    user: "1000:1000"
+    # The group that owns the drive's two device nodes on the host (CHANGE):
+    # `ls -ln /dev/sr0 /dev/sg*` shows it, often 24 (cdrom). Add a second
+    # entry if the sg node has another group.
+    group_add:
+      - "24"
+
+    # The drive: its block device and its matching SCSI generic node.
+    # MakeMKV needs both. The sg number follows the order the kernel finds
+    # SCSI devices in (disks first), so it can change after a reboot or a USB
+    # re-plug: deploy/README.md shows how to find the right one.
+    devices:
+      - /dev/sr0:/dev/sr0
+      - /dev/sg4:/dev/sg4 # CHANGE
+
+    ports:
+      - "8790:8790"
+
+    environment:
+      # MakeMKV is downloaded at first start only if you accept its licence:
+      # read https://www.makemkv.com/eula/ first.
+      MAKEMKV_ACCEPT_EULA: "yes"
+      MAKEMKV_KEY_FILE: /run/secrets/makemkv_key
+
+      DISCERN_DRIVES: /dev/sr0
+      # Staging and the library are on the same filesystem (one mount below),
+      # so Radarr's import is an instant rename, not a copy of the whole rip.
+      DISCERN_STAGING_DIR: /data/media/.discern-staging
+      DISCERN_LIBRARY_DIR: /data/media/Movies
+
+      DISCERN_RADARR_URL: http://radarr:7878 # CHANGE
+      DISCERN_RADARR_API_KEY_FILE: /run/secrets/radarr_api_key
+      # As Radarr sees it. Mount the media folder at the same path Radarr
+      # uses (here /data/media), and Radarr sees staging at the same path too.
+      DISCERN_RADARR_ROOT_FOLDER: /data/media/Movies # CHANGE
+      # DISCERN_RADARR_STAGING_DIR: /media/.discern-staging  # only if Radarr's path differs
+
+      DISCERN_USERNAME: admin
+      DISCERN_PASSWORD_FILE: /run/secrets/discern_password
+
+    volumes:
+      # Database, the installed MakeMKV and its settings (the key).
+      - ./config:/config
+      # The media folder: staging and the library inside one mount. CHANGE
+      # the host side to your media folder.
+      - /mnt/tank/media:/data/media
+
+    secrets:
+      - makemkv_key
+      - radarr_api_key
+      - discern_password
+
+    # Least privilege: no Linux capabilities, no privilege gain through setuid
+    # programs, and a read-only root filesystem. Discern writes only to
+    # /config, the media folder and /tmp.
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+# Outside Swarm, Compose mounts these files into /run/secrets as they are, so
+# the user above must be able to read them: chmod 640 and chown to that user.
+secrets:
+  makemkv_key:
+    file: ./secrets/makemkv_key
+  radarr_api_key:
+    file: ./secrets/radarr_api_key
+  discern_password:
+    file: ./secrets/discern_password

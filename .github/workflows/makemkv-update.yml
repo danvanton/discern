@@ -1,0 +1,62 @@
+name: MakeMKV update check
+
+# Once a week, look for a new MakeMKV release. If there is one, pin it (the
+# script checks MakeMKV's signature with the pinned key) and open a pull
+# request. Old MakeMKV versions stop working after a while, so this matters.
+#
+# Two GitHub details:
+#   - The repository must allow it: Settings → Actions → General → "Allow
+#     GitHub Actions to create and approve pull requests".
+#   - Pull requests opened with the workflow's own token don't start other
+#     workflows, so CI doesn't run on them by itself. Close and reopen the
+#     pull request to start it.
+on:
+  schedule:
+    - cron: "23 6 * * 1" # Mondays, 06:23 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the branch
+      pull-requests: write # open the pull request
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Pin the newest MakeMKV release
+        run: sh scripts/update-makemkv-pin.sh
+
+      - name: Open a pull request if the pin changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if git diff --quiet; then
+            echo "The pinned MakeMKV is the newest release."
+            exit 0
+          fi
+          . internal/makemkv/install/pin.env
+          branch="makemkv-${MAKEMKV_VERSION}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "A pull request for MakeMKV ${MAKEMKV_VERSION} already exists ($branch)."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "Update MakeMKV to ${MAKEMKV_VERSION}" \
+            -m "scripts/update-makemkv-pin.sh checked MakeMKV's signed checksum file with the pinned key and wrote the new hashes to pin.env."
+          git push origin "$branch"
+          gh pr create --head "$branch" --title "Update MakeMKV to ${MAKEMKV_VERSION}" --body "$(cat <<EOF
+          MakeMKV ${MAKEMKV_VERSION} is out. This pull request pins it.
+
+          - \`scripts/update-makemkv-pin.sh\` verified \`makemkv-sha-${MAKEMKV_VERSION}.txt\` with the pinned signing key and took the tarball hashes from its signed part.
+          - CI's \`TestPinMatchesSignedFile\` checks the same again. Close and reopen this pull request to start CI.
+          - Update the version, source and hash of \`makemkv-sha.txt\` in \`internal/makemkv/install/THIRD_PARTY.md\` before merging.
+
+          Before merging, read MakeMKV's release notes and try the new version on a real disc if you can: a new MakeMKV can change scans and rips.
+          EOF
+          )"

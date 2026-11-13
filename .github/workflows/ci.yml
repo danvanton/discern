@@ -4,17 +4,28 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The release workflow runs these checks first.
+  workflow_call:
+    inputs:
+      skip-image:
+        description: Skip the image build (the caller builds the image itself)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# Actions are pinned to a commit, not a tag: a tag can be moved to other code,
+# a commit can't. The comment says which release the commit is.
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
@@ -28,8 +39,30 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # TestPinMatchesSignedFile needs gpgv; it fails rather than skips in CI.
       - name: Test (with the race detector)
         run: go test -race -count=1 ./...
 
       - name: Build
         run: go build -o bin/discern ./cmd/discern
+
+  # The image builds for one platform here, to catch a broken Dockerfile
+  # before a release tries both.
+  image:
+    # On push and pull_request there are no inputs: skip-image is empty, so
+    # the job runs.
+    if: ${{ !inputs.skip-image }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the image (amd64, not pushed)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false

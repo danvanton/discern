@@ -1,6 +1,6 @@
 # Discern: design
 
-**Status:** draft, 2026-11-13. Decisions D1–D12 were accepted by the owner on 2026-11-13. A new decision starts as **Proposed** and becomes **Accepted** once the owner approves it. The decision log (section 17) holds the reasons.
+**Status:** draft, 2026-11-13. Decisions D1–D19 were accepted by the owner on 2026-11-13. A new decision starts as **Proposed** and becomes **Accepted** once the owner approves it. The decision log (section 17) holds the reasons.
 
 Discern turns a disc in a drive into a correctly named file in your library, with no clicks when it is sure and one question when it is not. It runs MakeMKV, works out which titles on the disc are the movie or the episodes, rips only those, and hands them to Radarr or Sonarr, or files them itself.
 
@@ -16,7 +16,7 @@ Discern turns a disc in a drive into a correctly named file in your library, wit
    - **Radarr/Sonarr:** import through their own Manual Import, check that it worked, and add missing movies as unmonitored.
    - **Library:** for users without Radarr or Sonarr, Discern renames and moves the files itself, with Plex/Jellyfin naming.
 4. **Run like infrastructure.** A small container, a clean shutdown, recovery from a crash, Prometheus metrics, health checks, signed releases.
-5. **Stay legally clean to publish.** MakeMKV is never in the repo or the image; each user installs it, accepts its EULA and brings a key.
+5. **Stay legally clean to publish.** MakeMKV's proprietary part is never in the repo or the image; each user installs it, accepts its EULA and brings a key. The image holds only MakeMKV's open-source libraries, which its licence lets anyone redistribute (decision D14).
 
 **Non-goals (for v1)**
 
@@ -157,7 +157,7 @@ flowchart LR
     A --> D
 ```
 
-- **`cmd/discern`** reads the settings, builds the parts and starts them. On SIGTERM it stops the web server first, so nobody starts new work, then gives running jobs 25 s to reach a safe point. A rip stops and resumes at the next start; an import finishes.
+- **`cmd/discern`** reads the settings, installs MakeMKV if needed and writes its key (section 9.1), builds the parts and starts them. `discern healthcheck` is the image's health check. On SIGTERM it stops the web server first, so nobody starts new work, then gives running jobs 6 s to reach a safe point. The whole shutdown fits in 8 s, inside the 10 s Docker allows after SIGTERM. A rip stops and resumes at the next start; an import finishes.
 - **`internal/app`** is the glue:
   - it starts a job's run when a disc goes in or the user approves or retries;
   - it resumes unfinished jobs at start;
@@ -374,9 +374,32 @@ The benchmark runs in CI, and a pull request that makes "wrong" go up fails. Tha
 
 ### 9.1 Install, key and process rules
 
-- **Install at first start, never in the image** (decision D6). On first start, with `MAKEMKV_ACCEPT_EULA=yes`, Discern downloads `makemkv-oss` and `makemkv-bin` of a **pinned version** from makemkv.com. It checks them against MakeMKV's GPG-signed checksum file with a pinned key, compiles them CLI-only into `/config/makemkv`, and records the version. Upgrades happen by changing the pin.
-- **Key.** `MAKEMKV_KEY` or the settings page writes `app_Key` into MakeMKV's `settings.conf`. A missing or expired key is a clear error on the dashboard, not a mysterious failed rip.
-- **Java.** The image includes a headless Java runtime so MakeMKV can run BD-J menus. Without it, the `SEG_MainFeature` evidence is missing on exactly the discs that need it.
+- **Two parts, installed in two places** (decisions D6 and D14). MakeMKV for Linux comes as two tarballs:
+
+  | Tarball | What it is | Licence | Where it goes |
+  |---|---|---|---|
+  | `makemkv-oss` | the libraries `makemkvcon` loads (`libmakemkv`, `libdriveio`) and two helpers, as source | LGPL or GPL, per file | compiled into the **image** at build time |
+  | `makemkv-bin` | `makemkvcon` itself, prebuilt for amd64, arm64 and others, plus its data files and `blues.jar` | MakeMKV's EULA | downloaded at **first start**, into `/config/makemkv/<version>` |
+
+- **The installer** (`internal/makemkv/install`) runs at every start, before the web server:
+  - It does nothing unless `MAKEMKV_ACCEPT_EULA=yes`. Discern then stops with a message pointing to the EULA. Withdrawing the acceptance stops Discern using an existing install too.
+  - If `/config/makemkv/<version>/installed.json` matches the pinned release and this CPU, it is done: a no-op.
+  - Otherwise it downloads `makemkv-bin-<version>.tar.gz` (19 MB for 2.0.0) and compares its SHA-256 with the pin. The tarball is opened only after that check passes: verify before parse.
+  - It copies out five files by exact name (`bin/<arch>/makemkvcon`, the three data files, the EULA), laid out as MakeMKV's own `make install` does. `makemkvcon` finds its data in `../share/MakeMKV`, relative to itself.
+  - It builds everything in a temporary folder and renames it into place, so an install is either complete or absent. The marker is written last. Leftovers of an interrupted install, and older versions, are removed.
+  - Setting `DISCERN_MAKEMKVCON` turns the installer off and uses that program instead. This is for the fake `makemkvcon` in development.
+- **Why the pinned hash is enough** (decision D15). MakeMKV signs a checksum file for each release (`makemkv-sha-<version>.txt`, clearsigned with GPG). The signature is checked when the pin is set, not at every install:
+  - `scripts/update-makemkv-pin.sh` verifies the signature with `gpgv` against the pinned key, then writes the two hashes into `pin.env` and saves the signed file next to it.
+  - It reads the hashes from `gpgv --output`, which contains only the signed text. Text added in front of the signed block still gets "Good signature" from gpgv, so a script that read the whole file could be fooled.
+  - `TestPinMatchesSignedFile` repeats the check on every CI run: the signed file verifies with the pinned key, and `pin.env` holds exactly its hashes.
+  - At install time, the hash pinned in the binary is stronger than the signature. It accepts only the exact file that was tested, not any file MakeMKV ever signed. This is how `go.sum` works: verify once when the pin is added, then compare hashes.
+- **The pinned key.** MakeMKV doesn't publish its key's fingerprint, so trust comes from cross-checks, done on 2026-11-13:
+  - `MakeMKV (signature) <support@makemkv.com>`, DSA 2048, created 2017-05-26, fingerprint `2ECF 2330 5F1F C0B3 2001 6733 94E3 083A 1804 2697`;
+  - the same key from keyserver.ubuntu.com and keys.openpgp.org;
+  - it signed both 2.0.0 (2026-09-21) and 1.18.4 (2026-06-15).
+- **Version and updates** (decision D16). The pin is 2.0.0. A weekly workflow (`makemkv-update.yml`) runs the pin script and opens a pull request when a new release is out. A new Discern release then ships it, and the installer swaps versions at the next start. Old MakeMKV versions stop working after a while, so the pin can't be left alone for long.
+- **Key.** `MAKEMKV_KEY` (or `MAKEMKV_KEY_FILE`) is written into MakeMKV's `settings.conf` as `app_Key` at every start. Other settings are kept, and an unchanged key writes nothing. The file is in `$HOME/.MakeMKV`, and the image sets `HOME=/config`. Keys with quotes, backslashes, spaces or control characters are refused, so a key can't break out of its quoted value. A settings page and a dashboard error for a missing or expired key come later.
+- **Java** (decision D17). The image includes Debian's headless Java. `makemkv-bin` ships `blues.jar`, MakeMKV's runner for a disc's Java menu (BD-J), so Java does get used. Without it, the `SEG_MainFeature` evidence is missing on exactly the discs that need it. How much it adds to the image, and how often it matters, is still to measure (section 19).
 - **Process rules.** One `makemkvcon` per drive. No drive listing while any rip runs. Each process gets a timeout, and output is read line by line as it streams, never buffered whole.
 - **Errors by code.** Failures are recognised by MakeMKV's numeric `MSG` codes and turned into specific errors ("disc unreadable", "key expired", "drive not supported").
 
@@ -429,6 +452,7 @@ The second route skips MakeMKV's muxer entirely. Opening the backup in MakeMKV i
 - **Config precedence:** defaults < `/config/discern.yaml` < environment variables. Environment variables win so a container can be configured entirely from compose.
   - **v0.1 reads environment variables only** (`internal/config`): every setting is a `DISCERN_*` variable, and secrets can come from a file through `NAME_FILE`. All problems are reported at once, so a fresh install can be fixed in one pass. The YAML file comes later, if a setting turns out to need it.
 - **Secrets** (API keys, MakeMKV key) come from env vars or, better, `*_FILE` variables pointing at Docker secrets. They are never logged or shown in the UI after saving.
+- **MakeMKV's own settings** keep MakeMKV's names, as other MakeMKV images use them: `MAKEMKV_ACCEPT_EULA` (only `yes` accepts; any other value set is an error, not a guess) and `MAKEMKV_KEY` / `MAKEMKV_KEY_FILE`. `DISCERN_MAKEMKV_DIR` (default `/config/makemkv`) is where MakeMKV is installed.
 - **Volumes:** `/config` (database, MakeMKV, TheDiscDB copy) and the media path (staging and library on the same filesystem).
 
 ---
@@ -486,24 +510,36 @@ Recordings come from real discs. When a disc behaves oddly in real use, its scan
 
 ## 14. Packaging and delivery
 
-- **Image:** multi-stage Dockerfile. Stage 1 builds the Go binary; the final stage is Debian slim with only what MakeMKV needs at runtime (its libraries, a headless Java) plus MKVToolNix for verification.
-  - **Runs as a non-root user** that is a member of the drive's group, with only `/dev/srN` and its `/dev/sgN` passed in. No `--privileged`.
-- **Platforms:** `linux/amd64` and `linux/arm64`.
-- **CI (GitHub Actions)**, on every pull request:
-  - lint (`golangci-lint`)
-  - unit tests with the race detector
-  - the benchmark gate
-  - an image build
-- **Release:** a version tag triggers the release.
-  - Build and push to GHCR.
-  - Generate an SBOM (the image's parts list).
-  - Sign the image with cosign (keyless).
-  - Publish a changelog.
+- **Image:** the `Dockerfile` has three stages (decision D17):
+  1. **build:** compiles Discern. It runs on the build machine's own CPU (`--platform=$BUILDPLATFORM`) and cross-compiles with `GOARCH`, so an arm64 image doesn't compile Go under emulation.
+  2. **makemkv-oss:** downloads the pinned `makemkv-oss` tarball, checks its SHA-256 against `pin.env`, and builds it without the GUI (`./configure --prefix=/usr --disable-gui`). It keeps MakeMKV's `License.txt` and a note of the source URL and hash.
+  3. **final:** Debian 13 slim. It holds Discern, the oss libraries, the libraries those link against, MKVToolNix and `default-jre-headless`. An `ldd` check fails the build if any library is missing.
+  - **Base images are pinned by tag and digest,** so a rebuild uses the same bytes until the pin is changed on purpose.
+  - **A health check** runs `discern healthcheck`, which asks the running server's `/healthz`. The image has no curl. The start period is 2 minutes, enough for the first start's download.
+  - **Not included:** `makemkvcon` (installed at first start), a compiler, curl, and a shell login for the user.
+- **Runs as a non-root user** (decision D18). The image's default is uid 10001. Compose sets `user:` to the owner of the media folders, so Radarr can move the rips, and adds the drive's group with `group_add`. Only `/dev/srN` and its `/dev/sgN` are passed in. No `--privileged`, no capabilities (`cap_drop: ALL`), `no-new-privileges`, and a read-only root filesystem with `/tmp` as tmpfs. There is no root entrypoint that changes user, as linuxserver's `PUID`/`PGID` images have: the container never runs anything as root.
+- **Platforms:** `linux/amd64` and `linux/arm64`. Both exist in `makemkv-bin` 2.0.0 (`bin/amd64`, `bin/arm64`).
+- **CI (GitHub Actions)**, on every pull request and push to main:
+  - formatting, `go vet`, unit tests with the race detector (including the pin's signature check, which fails rather than skips in CI)
+  - an image build for amd64, not pushed
+  - later: lint (`golangci-lint`) and the benchmark gate
+  - Actions are pinned to commits, not tags: a tag can be moved to other code, a commit can't.
+- **Release** (decision D19, `release.yml`): a version tag `vX.Y.Z` runs, in order:
+  1. the CI checks;
+  2. the image for both platforms, pushed to GHCR as `X.Y.Z`, `X.Y` and `latest`, with an SBOM (the image's parts list) and build provenance attached;
+  3. a keyless cosign signature on the image digest: GitHub's OIDC token proves the signature came from this workflow, so there is no signing key to keep;
+  4. a GitHub release with generated notes, the digest, the `cosign verify` command, and the `makemkv-oss` tarball the image was built from. That tarball is the source the LGPL asks to be offered with the compiled libraries.
+
+  There is no build cache: releases are rare, and nothing from an earlier run ends up in a published image.
+- **MakeMKV updates:** a weekly workflow (`makemkv-update.yml`) opens a pull request when a new MakeMKV is out (section 9.1).
 - **Dependencies:** Renovate opens update pull requests, and CI decides whether each is safe.
-- **Deployment examples:** a compose file, plus notes for running it as a TrueNAS SCALE custom app (device passthrough, dataset layout).
+- **Deployment examples:** `deploy/compose.yaml`, plus `deploy/README.md` on finding the values and running it as a TrueNAS SCALE custom app (device passthrough, dataset layout, the `sg` number that moves between reboots).
+  - Staging and the library are inside one mount, at the same path Radarr uses, so Radarr's import is a rename and needs no path mapping.
+  - Secrets come from Compose `secrets:` files through the `*_FILE` settings.
 - **First-deployment check.** No automated test can put a disc in a real drive. The tests do run the Linux drive calls against `/dev/null` in CI, which catches a wrong call but not a wrong answer. So on a new install:
-  1. Open and close the tray, then put a disc in. The log should show `disc inserted` and the dashboard a new job.
-  2. When the job finishes, the tray should open.
+  1. The log shows `MakeMKV installed`, and the dashboard's health list is all green.
+  2. Open and close the tray, then put a disc in. The log should show `disc inserted` and the dashboard a new job.
+  3. When the job finishes, the tray should open.
 
 ---
 
@@ -523,16 +559,18 @@ Recordings come from real discs. When a disc behaves oddly in real use, its scan
 - **Least privilege:** non-root, only the drive's devices, and writes only to `/config` and the media path. Every file move is checked to stay inside the configured roots (path traversal guard).
 - **Secrets** stay out of logs, out of the UI after saving, and out of the repo.
 - **Supply chain:**
-  - MakeMKV downloads are signature-checked.
+  - MakeMKV downloads must match SHA-256 hashes pinned in Discern, and the pins come from MakeMKV's GPG-signed checksum file, checked with a pinned key (section 9.1).
   - Go modules are pinned by `go.sum`.
-  - Images are signed and carry an SBOM.
+  - Base images are pinned by digest, and GitHub Actions by commit.
+  - Images are signed with cosign and carry an SBOM and build provenance.
 
 ---
 
 ## 16. Legal and licensing
 
 - Discern's own code is licensed under GPL-3.0 (decision D7).
-- MakeMKV is proprietary and is **never redistributed**. Each user downloads it through Discern, accepts its EULA with an explicit setting and supplies a key.
+- MakeMKV's proprietary part (`makemkv-bin`, with `makemkvcon`) is **never redistributed**. Each user downloads it through Discern, accepts its EULA with an explicit setting and supplies a key.
+- MakeMKV's open-source part (`makemkv-oss`) is compiled into the image (decision D14). Its source files carry LGPL-2.1 or GPL headers. Its `License.txt` is MakeMKV's EULA, which also allows redistributing the software unmodified and repackaging its Linux part, as long as the program files and the licence stay unchanged. The image keeps that licence in `/usr/share/doc/makemkv-oss/`, and each GitHub release attaches the exact source tarball.
 - TheDiscDB data is MIT-licensed. Discern credits it and downloads it at runtime.
 - Discern does not decrypt anything itself and has no download, indexer or sharing features. The README describes it as a tool for backing up discs you own.
 
@@ -555,6 +593,12 @@ Recordings come from real discs. When a disc behaves oddly in real use, its scan
 | D11 | **Two rip strategies**, Direct and Backup + remux, with an automatic fallback when there is space and a per-disc strategy history | Accepted | The backup route worked where MakeMKV's muxer stalled and where MakeMKV crashed opening its own backup. Choosing it automatically turns a night of manual work into one retry. | Ask the user every time (slow, and the fix is known); always use backup + remux (doubles the time and space for every disc) |
 | D12 | **Join multi-disc movies** into one file before import | Accepted | Radarr keeps one file per movie, so the parts must become one file. mkvmerge's append keeps chapters continuous. | Import parts separately (Radarr would treat disc 2 as a replacement); leave it to the user |
 | D13 | Name: **Discern** (Disc Identification, Selection, Capture, Extraction, Ripping and Naming), not an *arr name | Accepted | To discern is to tell the real thing from fakes: what the selector does with decoy playlists. A name without the *arr suffix avoids looking like part of the Servarr family, stands apart from the crowd of *arr rippers (Riparr, Ripparr, Discarr, Rexarr), and keeps the project apart from the *arr tools' association with downloading. Discoverability comes from the tagline and topics (radarr, sonarr, makemkv) instead. The word is shared with other small projects, but `NotNad/discern` and its image are free. | Trayarr (the working name); Disclathe and Traywright (unused coinages, easier to search for) |
+| D14 | Compile **`makemkv-oss` into the image**; download only **`makemkv-bin`** at first start. Amends D6: the line is now MakeMKV's proprietary part, not all of MakeMKV | Accepted | Only the open-source part needs a compiler. Building it in the image keeps gcc and the `-dev` packages out of the final image (about 300 MB less), and makes the first start a 19 MB download instead of a compile. The proprietary, EULA-bound part still never ships with Discern. The oss part's licences allow redistribution. The MakeMKV version is tied to the image, so the image and the MakeMKV version it was tested with always go together. | Compile both at first start in the container, as D6 first said (a compiler in a running image, a slow first start); compile in a separate one-shot installer container (keeps D6 exactly and the image small, but two images to publish and a more complex compose) |
+| D15 | The installer is **Go code in the binary**; it checks the download against a **pinned SHA-256**, and MakeMKV's **GPG signature is checked when the pin is set** (script and CI test), not at every install | Accepted | The Go installer is tested against a fake server and reports clear errors. A pinned hash is stronger at install time than the signature: it accepts only the exact file that was tested. The signature is what makes a new pin trustworthy, so that is where it is checked, and CI re-checks it on every run. No `gpgv` in the image. This is the `go.sum` model. | A shell script entrypoint (hard to test, errors only in logs); also running `gpgv` at every install (a second check on top of the hash, for gpgv in the image and more code) |
+| D16 | **Pin MakeMKV 2.0.0**; a **weekly workflow** opens a pull request when a new release is out | Accepted | Old MakeMKV versions stop working after a while, so updates can't depend on someone remembering. The workflow checks the signature before it proposes anything. Renovate can't check a GPG signature, so the workflow is custom. | Update by hand with a checklist (easy to forget); also let users override the version at run time (impossible with D14: the oss libraries are fixed in the image) |
+| D17 | Image: **Debian 13 slim**, with **headless Java** and **MKVToolNix** | Accepted | `makemkvcon` is built against glibc, and MakeMKV's libraries need libavcodec, OpenSSL, expat and zlib from apt. MakeMKV ships `blues.jar` to run BD-J menus, the source of `SEG_MainFeature` on the discs that need it most. MKVToolNix does verification and the remux fallback. | Alpine (musl can't run `makemkvcon`); distroless (no apt for the libraries); leaving Java out until measured, or a second image tag without it |
+| D18 | **Non-root by default** (uid 10001), with the user and the drive's group set in compose (`user:`, `group_add:`) | Accepted | The container never runs anything as root. Files in staging belong to the user Radarr already reads as. It is plain Docker, with nothing custom to explain. | linuxserver-style `PUID`/`PGID`, with a root entrypoint that drops privileges (familiar, but the container starts as root) |
+| D19 | Release: **multi-arch image on GHCR, with an SBOM, provenance and a keyless cosign signature**, on a version tag, after the CI checks | Accepted | These are a few lines each with the standard Docker actions, and they let anyone check what the image contains and that this repository's workflow built it. | Build and push only, and sign later at v1.0 |
 
 ---
 
@@ -574,8 +618,11 @@ Recordings come from real discs. When a disc behaves oddly in real use, its scan
 
 1. **ContentHash:** how does TheDiscDB compute it, and can Discern compute the same value from a disc without ripping? If yes, it is the fastest and surest identification. Check TheDiscDB's ImportBuddy source and Engram's implementation.
 2. **Segment maps across MakeMKV versions:** do they stay stable enough to match on? Test with the recorded scans of a few discs on two MakeMKV versions.
-3. **Java in the image:** how much size does a headless Java runtime add, and does `SEG_MainFeature` really need it in CLI mode? Measure.
+3. **Java in the image:** MakeMKV does use Java: `makemkv-bin` ships `blues.jar`, and `makemkvcon` looks for Java in `/usr/lib/jvm` and `/usr/bin/java` (decision D17). Still open: how much size it adds (read it from the first CI image build), and how often `SEG_MainFeature` depends on it. Scan one fake-playlist disc with and without Java on the first real run.
 4. **Contributing back:** add an opt-in "send this disc to TheDiscDB" like Engram's, or only link to their instructions (as Rexarr does)?
 5. **MakeMKV's debug log:** can `makemkvcon` be told to write it to a named file (a debug option), so the watchdog needn't find it among the open file descriptors? Check `makemkvcon`'s options on the pinned version.
 6. **Spotting risky discs before ripping:** does the scan show a Dolby Vision enhancement layer (profile 7) as its own stream? If so, the strategy history can treat "same MakeMKV version + profile 7" as a reason to start with Backup + remux. Check with a recorded scan of a profile 7 disc.
 7. ~~Name check~~ Done (decision D13): `NotNad/discern` and its image names are free; the word itself is shared with a few small unrelated projects.
+8. **MakeMKV's helpers in the image:** `makemkvcon` is in `/config/makemkv/<version>/bin`, but the oss helpers `mmgplsrv` (DVD menus) and `mmccextr` (closed captions) are in `/usr/bin`. Does `makemkvcon` find them through `PATH`, or only next to itself? Check with a DVD scan on the first real run; if it fails, the installer can link them into its `bin`.
+9. **libcurl:** `makemkvcon` loads libcurl when it is there, so the image includes it. What for (the key download for 4K discs, update checks)? Check its debug log on the first 4K scan.
+10. **Read-only root filesystem:** the compose example runs with `read_only: true` and a tmpfs `/tmp`. Check that MakeMKV and Java write nowhere else (a scan and a rip on the first real run).

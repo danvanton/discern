@@ -20,7 +20,10 @@ type Config struct {
 	DataDir    string        // database and other state
 	StagingDir string        // where rips wait to be imported; same filesystem as the library
 	LibraryDir string        // optional: the movie library as Discern sees it, to check the filesystem
-	MakeMKVCon string        // path to makemkvcon
+	MakeMKVCon string        // path to makemkvcon; empty: Discern installs MakeMKV and uses that
+	MakeMKVDir string        // where Discern installs MakeMKV
+	AcceptEULA bool          // MAKEMKV_ACCEPT_EULA=yes: the user accepts MakeMKV's licence
+	MakeMKVKey string        // written into MakeMKV's settings; empty leaves them alone
 	Drives     []string      // optical drives to watch
 	DrivePoll  time.Duration // how often drives are checked
 	Eject      bool          // eject the disc when its job is done
@@ -52,7 +55,10 @@ func Load(getenv Getenv, readFile ReadFile) (Config, error) {
 		DataDir:    r.str("DISCERN_DATA_DIR", "/config"),
 		StagingDir: r.str("DISCERN_STAGING_DIR", "/media/staging"),
 		LibraryDir: r.str("DISCERN_LIBRARY_DIR", ""),
-		MakeMKVCon: r.str("DISCERN_MAKEMKVCON", "makemkvcon"),
+		MakeMKVCon: r.str("DISCERN_MAKEMKVCON", ""),
+		MakeMKVDir: r.str("DISCERN_MAKEMKV_DIR", ""),
+		AcceptEULA: r.eula("MAKEMKV_ACCEPT_EULA"),
+		MakeMKVKey: r.secret("MAKEMKV_KEY"),
 		Drives:     r.list("DISCERN_DRIVES", "/dev/sr0"),
 		DrivePoll:  r.duration("DISCERN_DRIVE_POLL", 2*time.Second),
 		Eject:      r.boolean("DISCERN_EJECT", true),
@@ -73,6 +79,10 @@ func Load(getenv Getenv, readFile ReadFile) (Config, error) {
 	if c.LibraryDir != "" {
 		c.LibraryDir = r.abs("DISCERN_LIBRARY_DIR", c.LibraryDir)
 	}
+	if c.MakeMKVDir == "" {
+		c.MakeMKVDir = filepath.Join(c.DataDir, "makemkv")
+	}
+	c.MakeMKVDir = r.abs("DISCERN_MAKEMKV_DIR", c.MakeMKVDir)
 	// Radarr usually sees the staging folder at the same path; set this when
 	// its container mounts it elsewhere. It must be absolute: Radarr has no
 	// idea of Discern's working directory.
@@ -187,6 +197,21 @@ func (r *reader) boolean(name string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+// eula reads the licence acceptance. Only "yes" accepts; anything else that
+// is set ("true", "1", "y") is an error rather than a guess at what was
+// meant.
+func (r *reader) eula(name string) bool {
+	switch v := r.str(name, ""); {
+	case v == "":
+		return false
+	case strings.EqualFold(v, "yes"):
+		return true
+	default:
+		r.fail("%s: set it to yes to accept MakeMKV's licence (got %q)", name, v)
+		return false
+	}
 }
 
 func (r *reader) require(name, v string) {

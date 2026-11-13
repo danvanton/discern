@@ -36,6 +36,12 @@ export FAKE_MAKEMKVCON='{"info":{"file":"testdata/makemkv/info-demo-small.txt"},
 
 Open http://127.0.0.1:18790 and press **Scan disc**. The demo disc is identified as The Matrix and title 0 is suggested. Press **Rip and import**: the progress bar runs for a few seconds, then the job imports into `dev/library` and shows **Done**.
 
+## Run it with Docker
+
+The image is `ghcr.io/notnad/discern`, for amd64 and arm64. [`deploy/compose.yaml`](deploy/compose.yaml) is a complete example, and [`deploy/README.md`](deploy/README.md) explains the drive passthrough, the folders and TrueNAS SCALE.
+
+At the first start, Discern downloads MakeMKV's `makemkvcon` from makemkv.com into `/config/makemkv`. It does this only if you set `MAKEMKV_ACCEPT_EULA=yes`, and it checks the download against a hash pinned in the release. The image holds only MakeMKV's open-source libraries.
+
 ## Settings
 
 Everything is an environment variable. Secrets can also come from a file: set `NAME_FILE` instead of `NAME`.
@@ -52,7 +58,10 @@ Everything is an environment variable. Secrets can also come from a file: set `N
 | `DISCERN_RADARR_STAGING_DIR` | same as staging | the staging folder as Radarr's container sees it; must be absolute |
 | `DISCERN_LIBRARY_DIR` | (none) | the movie library as Discern sees it; set it and Discern warns at start-up if staging is on another filesystem |
 | `DISCERN_RADARR_QUALITY_PROFILE` | `Any` | profile for movies Discern adds (always unmonitored) |
-| `DISCERN_MAKEMKVCON` | `makemkvcon` | |
+| `MAKEMKV_ACCEPT_EULA` | (none) | set to `yes` once you have read and accept [MakeMKV's licence](https://www.makemkv.com/eula/); until then Discern installs nothing and stops |
+| `MAKEMKV_KEY` | (none) | your MakeMKV key, written into MakeMKV's settings at start; or `_FILE` |
+| `DISCERN_MAKEMKV_DIR` | `/config/makemkv` | where Discern installs MakeMKV |
+| `DISCERN_MAKEMKVCON` | (none) | use this makemkvcon instead of installing MakeMKV (development, with the fake) |
 | `DISCERN_DRIVES` | `/dev/sr0` | comma-separated |
 | `DISCERN_DRIVE_POLL` | `2s` | |
 | `DISCERN_EJECT` | `true` | eject the disc when its job is done |
@@ -60,7 +69,7 @@ Everything is an environment variable. Secrets can also come from a file: set `N
 
 ## Legal
 
-Discern is for backing up discs you own. It does not decrypt anything itself and does not include MakeMKV. Each user installs MakeMKV through Discern, accepts [MakeMKV's licence](https://www.makemkv.com/eula/) and supplies their own key. Discern has no download or sharing features.
+Discern is for backing up discs you own. It does not decrypt anything itself and does not include MakeMKV's program. The image contains only MakeMKV's open-source libraries, and each release links their source. Each user installs MakeMKV through Discern, accepts [MakeMKV's licence](https://www.makemkv.com/eula/) and supplies their own key. Discern has no download or sharing features.
 
 ## How it's built
 

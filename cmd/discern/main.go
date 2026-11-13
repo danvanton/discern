@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/NotNad/discern/internal/importer"
 	"github.com/NotNad/discern/internal/jobs"
 	"github.com/NotNad/discern/internal/makemkv"
+	"github.com/NotNad/discern/internal/makemkv/install"
 	"github.com/NotNad/discern/internal/radarr"
 	"github.com/NotNad/discern/internal/steps"
 	"github.com/NotNad/discern/internal/store"
@@ -46,10 +48,61 @@ func checkStagingFilesystem(log *slog.Logger, staging, library string) {
 	}
 }
 
+// setUpMakeMKV installs the pinned MakeMKV release unless DISCERN_MAKEMKVCON
+// names a makemkvcon to use instead (the fake, in development), writes the
+// key into MakeMKV's settings, and returns the makemkvcon to run.
+//
+// It runs before the web server starts, so a container that can't install
+// MakeMKV stops with the reason in its log, as a bad setting does, and
+// Docker's restart policy tries again.
+func setUpMakeMKV(ctx context.Context, log *slog.Logger, cfg config.Config) (string, error) {
+	makemkvcon := cfg.MakeMKVCon
+	if makemkvcon != "" {
+		log.Info("using the makemkvcon in DISCERN_MAKEMKVCON; Discern installs nothing", "path", makemkvcon)
+	} else {
+		pin, err := install.Pinned()
+		if err != nil {
+			return "", err
+		}
+		in := &install.Installer{Dir: cfg.MakeMKVDir, Release: pin, AcceptEULA: cfg.AcceptEULA, Arch: runtime.GOARCH}
+		did, err := in.Ensure(ctx)
+		if err != nil {
+			return "", fmt.Errorf("MakeMKV %s: %w", pin.Version, err)
+		}
+		makemkvcon = in.Makemkvcon()
+		if did {
+			log.Info("MakeMKV installed", "version", pin.Version, "path", makemkvcon)
+		} else {
+			log.Info("MakeMKV is installed", "version", pin.Version)
+		}
+	}
+	if cfg.MakeMKVKey != "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("finding MakeMKV's settings: %w", err)
+		}
+		changed, err := install.WriteKey(install.SettingsPath(home), cfg.MakeMKVKey)
+		if err != nil {
+			return "", fmt.Errorf("writing the MakeMKV key: %w", err)
+		}
+		if changed {
+			log.Info("MakeMKV key saved in its settings")
+		}
+	}
+	return makemkvcon, nil
+}
+
 // version is set at build time with -ldflags "-X main.version=v0.1.0".
 var version = "dev"
 
 func main() {
+	if len(os.Args) > 1 {
+		if os.Args[1] == "healthcheck" {
+			os.Exit(healthcheck())
+		}
+		fmt.Fprintf(os.Stderr, "usage: discern [healthcheck]\nunknown command %q\n", os.Args[1])
+		os.Exit(2)
+	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	if err := run(log); err != nil {
 		log.Error("discern stopped", "err", err)
@@ -93,14 +146,24 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	runner := makemkv.NewRunner(cfg.MakeMKVCon)
+	makemkvcon, err := setUpMakeMKV(ctx, log, cfg)
+	if err != nil {
+		if ctx.Err() != nil {
+			// Stopped mid-install (docker stop): an interruption, not a
+			// failure. The next start installs from scratch.
+			log.Info("stopped while installing MakeMKV; the install starts again at the next start")
+			return nil
+		}
+		return err
+	}
+	runner := makemkv.NewRunner(makemkvcon)
 	tracker := drive.NewTracker()
 	jobSteps := steps.New(runner, imp)
 	jobSteps.Tray = tracker
 	engine := jobs.NewEngine(st, jobSteps, cfg.StagingDir, log)
 
 	a := app.New(ctx, st, engine, rc, log)
-	a.Drives, a.MakeMKVCon = cfg.Drives, cfg.MakeMKVCon
+	a.Drives, a.MakeMKVCon = cfg.Drives, makemkvcon
 	if cfg.Eject {
 		a.Eject = drive.Eject
 	}

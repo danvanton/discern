@@ -2,3 +2,6 @@
 * text=auto eol=lf
 # Recorded makemkvcon output must stay byte-for-byte as recorded.
 testdata/** -text
+# MakeMKV's signed checksum file and its signing key stay exactly as published.
+internal/makemkv/install/makemkv-sha.txt -text
+internal/makemkv/install/*.gpg binary

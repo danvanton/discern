@@ -49,7 +49,8 @@ func TestDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.Listen != ":8790" || c.DataDir != abs(t, "/config") || c.StagingDir != abs(t, "/media/staging") ||
-		c.MakeMKVCon != "makemkvcon" || len(c.Drives) != 1 || c.Drives[0] != "/dev/sr0" ||
+		c.MakeMKVCon != "" || c.MakeMKVDir != abs(t, "/config/makemkv") || c.AcceptEULA || c.MakeMKVKey != "" ||
+		len(c.Drives) != 1 || c.Drives[0] != "/dev/sr0" ||
 		c.DrivePoll != 2*time.Second || !c.Eject || c.RadarrQualityProfile != "Any" {
 		t.Errorf("defaults = %+v", c)
 	}
@@ -163,5 +164,28 @@ func TestRelativeFoldersBecomeAbsolute(t *testing.T) {
 	if _, err := Load(env(with(map[string]string{"DISCERN_RADARR_STAGING_DIR": "data/staging"})), files(nil)); err == nil ||
 		!strings.Contains(err.Error(), "must be an absolute path") {
 		t.Errorf("relative Radarr staging dir: err = %v", err)
+	}
+}
+
+func TestMakeMKVSettings(t *testing.T) {
+	c, err := Load(env(with(map[string]string{
+		"MAKEMKV_ACCEPT_EULA": "YES",
+		"MAKEMKV_KEY_FILE":    "/run/secrets/makemkv",
+		"DISCERN_DATA_DIR":    "/data/discern",
+	})), files(map[string]string{"/run/secrets/makemkv": "T-key-from-file\n"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.AcceptEULA || c.MakeMKVKey != "T-key-from-file" || c.MakeMKVDir != abs(t, "/data/discern/makemkv") {
+		t.Errorf("got EULA %v, key %q, dir %q", c.AcceptEULA, c.MakeMKVKey, c.MakeMKVDir)
+	}
+}
+
+func TestEULAOnlyAcceptsYes(t *testing.T) {
+	for _, v := range []string{"true", "1", "y", "no"} {
+		_, err := Load(env(with(map[string]string{"MAKEMKV_ACCEPT_EULA": v})), files(nil))
+		if err == nil || !strings.Contains(err.Error(), "MAKEMKV_ACCEPT_EULA") {
+			t.Errorf("MAKEMKV_ACCEPT_EULA=%s: err = %v; want an error", v, err)
+		}
 	}
 }
