@@ -19,6 +19,8 @@ Thumbs.db
 # Secrets: never commit these
 .env
 *.env
+# Not a secret: the MakeMKV version and tarball hashes Discern is pinned to.
+!internal/makemkv/install/pin.env
 
 # Local demo folders (see the README)
 /dev/
