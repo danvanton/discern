@@ -1,0 +1,21 @@
+# Build output
+/bin/
+/dist/
+*.exe
+
+# Local runtime data (database, MakeMKV install, TheDiscDB copy)
+/config/
+
+# Test and coverage output
+*.out
+coverage.html
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets: never commit these
+.env
+*.env

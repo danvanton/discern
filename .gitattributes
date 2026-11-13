@@ -1,0 +1,4 @@
+# Keep line endings LF in the repo, whatever the OS that edits it.
+* text=auto eol=lf
+# Recorded makemkvcon output must stay byte-for-byte as recorded.
+testdata/** -text
