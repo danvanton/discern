@@ -167,6 +167,44 @@ docs/                 this file, ADRs, user guide
 
 ---
 
+### How the Radarr import is built (v0.1)
+
+`internal/radarr` is a small client for the API calls Trayarr needs. `internal/importer` uses it. The flow keeps the lessons of the pipeline Trayarr grew out of.
+
+**It refuses before sending anything:**
+- a job with no movie;
+- an empty staging folder;
+- more than one file (v0.1 imports one title per movie);
+- a movie Radarr already has a file for (there are no silent replacements);
+- a video size it can't name a quality for;
+- a folder outside the staging mapping.
+
+**Then it imports:**
+1. Ask Radarr to scan the job's staging folder, and use Radarr's own entry for the file. That way the path and languages are what Radarr itself read. This comes first, so a wrong path mapping fails before anything is added to the library.
+2. If a Manual Import for this file is already running (a retry after a timeout), wait for that one instead of starting a second.
+3. Otherwise, add the movie if it is missing. It is always added unmonitored, with no search, so Trayarr never makes Radarr download anything. That rule is in the client itself: a caller can't turn it on.
+4. Set the movie and the quality on the entry. The quality object is Radarr's own, from its quality definitions, never built by hand. The grade is the higher of what the video's width and height say: a scope film stored as 1920x800 and an anamorphic 1440x1080 Blu-ray are both `Remux-1080p`.
+5. Send a Manual Import with `importMode: move`.
+6. Wait for *that* command's ID, not Radarr's whole queue. A few failed status checks in a row (Radarr restarting) are tolerated, because the command keeps running in Radarr regardless.
+
+**It verifies the import happened.** Radarr has to say the movie has a file of the expected quality, *and* the file has to have left staging.
+
+**Path mapping.** Trayarr and Radarr usually mount the same storage at different places. `PathMap` translates the staging folder, and refuses anything outside it, so it doubles as the guard on what Radarr is asked to import.
+
+**Safe to rerun.** An empty staging folder plus a movie whose file Radarr added *after the job started* means the import already happened before a crash, so `Import` returns success without sending anything. If the movie's file is older than the job, it's the user's earlier copy: the rip has gone missing, and that is an error, not a success.
+
+**Identify.** `internal/identify` cleans the disc label:
+- `SOLO_A_STAR_WARS_STORY` becomes "Solo A Star Wars Story";
+- disc words (`UHD`, `D1`, `Disc 1`) are dropped;
+- a trailing `THE` moves to the front;
+- an edition is set apart, but only at the end of the label, after the title ("Watchmen- Ultimate Cut"). Edition words elsewhere are part of the title: `UNCUT_GEMS`, `THE_FINAL_CUT`;
+- a year counts only in brackets ("Spider-Man 3 (2007)"). A bare number is part of the title: `BLADE_RUNNER_2049`, `1917`;
+- a generic label (`DVD_VIDEO`, `BD_ROM`, `VIDEO_TS`, `LOGICAL_VOLUME_ID`) gives no search term at all.
+
+The volume label is tried first, then MakeMKV's disc name. Radarr's TMDb lookup does the search, and a result from the label's year wins. A raw label is never searched, since a generic one would match a random film. No match, or no usable label, is not an error: the user picks the movie in Needs you.
+
+**API key.** It is sent in the `X-Api-Key` header, never in a URL, so it can't end up in a log line or an error message.
+
 ## 6. Jobs, state and recovery
 
 ```mermaid
