@@ -1,4 +1,4 @@
-// Package app ties Trayarr's parts together at run time: it starts a job's
+// Package app ties Discern's parts together at run time: it starts a job's
 // run when a disc goes in or the user acts, resumes jobs after a restart,
 // ejects finished discs, and reports health. It holds no logic of its own
 // about discs or Radarr; that lives in the parts.
@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NotNad/trayarr/internal/jobs"
-	"github.com/NotNad/trayarr/internal/radarr"
-	"github.com/NotNad/trayarr/internal/store"
+	"github.com/NotNad/discern/internal/jobs"
+	"github.com/NotNad/discern/internal/radarr"
+	"github.com/NotNad/discern/internal/store"
 )
 
 // App runs jobs in the background and answers the web UI.
@@ -25,7 +25,7 @@ type App struct {
 	radarr *radarr.Client
 	log    *slog.Logger
 
-	// Drives are the device paths Trayarr manages.
+	// Drives are the device paths Discern manages.
 	Drives []string
 	// MakeMKVCon is the makemkvcon path, checked by Health.
 	MakeMKVCon string
@@ -104,7 +104,7 @@ func (a *App) Pending(drive string) bool {
 // DiscInserted starts a job for the disc in drive.
 func (a *App) DiscInserted(ctx context.Context, drive string) (*jobs.Job, error) {
 	if !a.knows(drive) {
-		return nil, fmt.Errorf("%s is not one of Trayarr's drives", drive)
+		return nil, fmt.Errorf("%s is not one of Discern's drives", drive)
 	}
 	j, err := a.store.CreateJob(ctx, drive)
 	if err != nil {
@@ -217,7 +217,7 @@ type Check struct {
 	Detail string `json:"detail"`
 }
 
-// Health checks what Trayarr needs to work: its database, makemkvcon and
+// Health checks what Discern needs to work: its database, makemkvcon and
 // Radarr. It is what /readyz reports.
 func (a *App) Health(ctx context.Context) []Check {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)

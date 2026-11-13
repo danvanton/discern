@@ -1,4 +1,4 @@
-// Package web serves Trayarr's UI: server-rendered pages (html/template),
+// Package web serves Discern's UI: server-rendered pages (html/template),
 // with htmx refreshing the parts that change, such as rip progress
 // (decision D4). Everything, templates and htmx included, is built into the
 // binary.
@@ -23,8 +23,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NotNad/trayarr/internal/app"
-	"github.com/NotNad/trayarr/internal/jobs"
+	"github.com/NotNad/discern/internal/app"
+	"github.com/NotNad/discern/internal/jobs"
 )
 
 //go:embed templates/*.html
@@ -33,7 +33,7 @@ var templateFS embed.FS
 //go:embed static
 var staticFS embed.FS
 
-// Backend is what the UI needs from the rest of Trayarr. *app.App provides
+// Backend is what the UI needs from the rest of Discern. *app.App provides
 // it; tests use a fake.
 type Backend interface {
 	Job(ctx context.Context, id int64) (*jobs.Job, error)
@@ -101,7 +101,7 @@ func New(b Backend, opt Options) (http.Handler, error) {
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 
 	// Health endpoints sit outside the login, for container health checks.
-	// They say whether Trayarr works, never anything secret.
+	// They say whether Discern works, never anything secret.
 	root := http.NewServeMux()
 	root.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
 	root.HandleFunc("GET /readyz", s.readyz)
@@ -157,7 +157,7 @@ func (s *server) auth(next http.Handler) http.Handler {
 				n := s.guards.fail(ip)
 				s.log.Warn("failed web login", "ip", ip, "user", u, "failures", n)
 			}
-			w.Header().Set("WWW-Authenticate", `Basic realm="Trayarr", charset="UTF-8"`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="Discern", charset="UTF-8"`)
 			http.Error(w, "login required", http.StatusUnauthorized)
 			return
 		}
@@ -238,7 +238,7 @@ func clientIP(r *http.Request) string {
 
 // sameOrigin blocks cross-site request forgery: a browser sends Basic auth
 // with any request to this host, including a form another website submits.
-// Changes are only accepted from Trayarr's own pages, which a browser marks
+// Changes are only accepted from Discern's own pages, which a browser marks
 // with an Origin header of this host (or Sec-Fetch-Site: same-origin).
 // Requests with neither header come from scripts like curl, which don't send
 // stored credentials by themselves.
@@ -480,7 +480,7 @@ func (s *server) apiJobs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"active": toAPI(active), "recent": toAPI(recent)})
 }
 
-// readyz answers 200 when everything Trayarr needs works, 503 otherwise. It
+// readyz answers 200 when everything Discern needs works, 503 otherwise. It
 // is outside the login (for container health checks), so it says only which
 // check failed: the details (error text with internal addresses and paths)
 // are on the logged-in dashboard.
@@ -516,7 +516,7 @@ func (s *server) render(w http.ResponseWriter, status int, page, name string, da
 // fail logs the real error and shows the user a short one.
 func (s *server) fail(w http.ResponseWriter, err error) {
 	s.log.Error("web request failed", "err", err)
-	http.Error(w, "something went wrong; see Trayarr's log", http.StatusInternalServerError)
+	http.Error(w, "something went wrong; see Discern's log", http.StatusInternalServerError)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

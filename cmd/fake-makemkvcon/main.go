@@ -1,5 +1,5 @@
 // Command fake-makemkvcon stands in for makemkvcon during development: point
-// Trayarr's MakeMKV path at it and describe its behaviour in the
+// Discern's MakeMKV path at it and describe its behaviour in the
 // FAKE_MAKEMKVCON environment variable (see internal/makemkv/fake).
 //
 // Example, a rip that stalls at 640 MiB while it keeps reading:
@@ -10,7 +10,7 @@ package main
 import (
 	"os"
 
-	"github.com/NotNad/trayarr/internal/makemkv/fake"
+	"github.com/NotNad/discern/internal/makemkv/fake"
 )
 
 func main() {

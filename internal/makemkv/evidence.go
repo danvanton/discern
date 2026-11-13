@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NotNad/trayarr/internal/format"
+	"github.com/NotNad/discern/internal/format"
 )
 
 // Evidence is what the watchdog saves about a rip before stopping it: enough
-// for a bug report on MakeMKV's forum, and for Trayarr's own tests (a
+// for a bug report on MakeMKV's forum, and for Discern's own tests (a
 // recorded stall becomes a test case).
 type Evidence struct {
 	Verdict    Verdict

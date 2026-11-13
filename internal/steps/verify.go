@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/NotNad/trayarr/internal/jobs"
-	"github.com/NotNad/trayarr/internal/makemkv"
+	"github.com/NotNad/discern/internal/jobs"
+	"github.com/NotNad/discern/internal/makemkv"
 )
 
 // The size a rip may have, as a share of the size MakeMKV gave the title in

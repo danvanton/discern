@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NotNad/trayarr/internal/makemkv"
+	"github.com/NotNad/discern/internal/makemkv"
 )
 
 // Steps does the actual work of each state. The engine decides which step
@@ -27,7 +27,7 @@ type Steps interface {
 	// CheckDisc confirms that the disc in j's drive is still the one j
 	// scanned, returning ErrDiscChanged if not. The engine calls it before
 	// every rip: the user may have swapped discs while the job waited for
-	// approval, or while Trayarr was stopped.
+	// approval, or while Discern was stopped.
 	CheckDisc(ctx context.Context, j *Job) error
 	Scan(ctx context.Context, j *Job) (*makemkv.Disc, error)
 	Identify(ctx context.Context, j *Job) (*Movie, error)
@@ -182,9 +182,9 @@ func (e *Engine) step(ctx context.Context, j *Job) error {
 		return e.move(ctx, j, Importing, "")
 
 	case Importing:
-		// An import that has started finishes even if Trayarr is shutting
+		// An import that has started finishes even if Discern is shutting
 		// down or the user cancels (the Importer bounds it with its own
-		// timeouts). Stopping halfway could leave Radarr and Trayarr
+		// timeouts). Stopping halfway could leave Radarr and Discern
 		// disagreeing about where the file is.
 		ictx := context.WithoutCancel(ctx)
 		if err := e.steps.Import(ictx, j, e.StagingDir(j.ID)); err != nil {

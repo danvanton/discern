@@ -1,4 +1,4 @@
-// Package store keeps Trayarr's state in SQLite: one file, no server, and
+// Package store keeps Discern's state in SQLite: one file, no server, and
 // transactions, so a crash can never leave a half-saved job (decision D3).
 package store
 
@@ -50,8 +50,8 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 	// One connection: SQLite allows one writer at a time anyway, and a single
-	// connection rules out "database is locked" between Trayarr's own
-	// goroutines. Trayarr's load (a few jobs, a progress update a second) is
+	// connection rules out "database is locked" between Discern's own
+	// goroutines. Discern's load (a few jobs, a progress update a second) is
 	// far below what that serves.
 	db.SetMaxOpenConns(1)
 	s := &Store{db: db, now: time.Now}
@@ -79,7 +79,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if version > len(names) {
-		return fmt.Errorf("database schema version %d is newer than this Trayarr knows (%d); was it opened by a newer version?", version, len(names))
+		return fmt.Errorf("database schema version %d is newer than this Discern knows (%d); was it opened by a newer version?", version, len(names))
 	}
 	for i := version; i < len(names); i++ {
 		body, err := migrations.ReadFile(names[i])

@@ -66,7 +66,7 @@ func TestParseLine(t *testing.T) {
 	}
 }
 
-// Malformed known records must be errors, so a scan Trayarr can't fully read
+// Malformed known records must be errors, so a scan Discern can't fully read
 // is never used to decide what to rip.
 func TestParseLineErrors(t *testing.T) {
 	bad := []string{

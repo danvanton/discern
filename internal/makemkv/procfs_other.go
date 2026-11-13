@@ -4,7 +4,7 @@ package makemkv
 
 import "errors"
 
-// Trayarr runs on Linux. Elsewhere (a developer's Windows or macOS machine)
+// Discern runs on Linux. Elsewhere (a developer's Windows or macOS machine)
 // there is no /proc: the watchdog then works from output growth alone, and
 // can only detect hangs, not stalls.
 

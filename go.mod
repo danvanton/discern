@@ -1,4 +1,4 @@
-module github.com/NotNad/trayarr
+module github.com/NotNad/discern
 
 go 1.27.4
 

@@ -1,4 +1,4 @@
--- Jobs: one row per disc that went through Trayarr.
+-- Jobs: one row per disc that went through Discern.
 CREATE TABLE jobs (
     id         INTEGER PRIMARY KEY,
     drive      TEXT    NOT NULL,

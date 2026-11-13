@@ -1,6 +1,6 @@
 // Package radarrtest is an in-memory stand-in for Radarr, for tests and for
-// running Trayarr locally without a real Radarr (cmd/fake-radarr). It answers
-// the API calls Trayarr makes. Its Manual Import really moves the file, from
+// running Discern locally without a real Radarr (cmd/fake-radarr). It answers
+// the API calls Discern makes. Its Manual Import really moves the file, from
 // the staging folder (mapped back from Radarr's path) into a library folder,
 // so checks run against real files.
 package radarrtest
@@ -23,7 +23,7 @@ import (
 // Server is the fake Radarr.
 type Server struct {
 	APIKey  string
-	Local   string // the staging folder as Trayarr sees it
+	Local   string // the staging folder as Discern sees it
 	Remote  string // the same folder as Radarr sees it
 	Library string // where imported files go
 

@@ -12,4 +12,4 @@ How `htmx.min.js` was obtained, so it can be checked or updated the same way:
 
 SHA-256 of the file as committed: `e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447`.
 
-The file is built into the binary with `embed`, so browsers load it from Trayarr itself, never from a CDN.
+The file is built into the binary with `embed`, so browsers load it from Discern itself, never from a CDN.

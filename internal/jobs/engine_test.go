@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NotNad/trayarr/internal/jobs"
-	"github.com/NotNad/trayarr/internal/makemkv"
-	"github.com/NotNad/trayarr/internal/store"
+	"github.com/NotNad/discern/internal/jobs"
+	"github.com/NotNad/discern/internal/makemkv"
+	"github.com/NotNad/discern/internal/store"
 )
 
 var ctx = context.Background()
@@ -117,13 +117,13 @@ type env struct {
 func newEnv(t *testing.T, steps *fakeSteps) *env {
 	t.Helper()
 	dir := t.TempDir()
-	e := &env{steps: steps, dbPath: filepath.Join(dir, "trayarr.db"), stage: filepath.Join(dir, "staging")}
+	e := &env{steps: steps, dbPath: filepath.Join(dir, "discern.db"), stage: filepath.Join(dir, "staging")}
 	e.reopen(t)
 	return e
 }
 
 // reopen starts a fresh store and engine on the same database file: what a
-// restart of Trayarr looks like.
+// restart of Discern looks like.
 func (e *env) reopen(t *testing.T) {
 	t.Helper()
 	if e.store != nil {

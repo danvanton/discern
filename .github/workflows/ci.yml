@@ -32,4 +32,4 @@ jobs:
         run: go test -race -count=1 ./...
 
       - name: Build
-        run: go build -o bin/trayarr ./cmd/trayarr
+        run: go build -o bin/discern ./cmd/discern

@@ -1,5 +1,5 @@
 // Package radarr is a small client for the parts of Radarr's v3 API that
-// Trayarr uses: movie lookup, adding a movie, Manual Import and commands.
+// Discern uses: movie lookup, adding a movie, Manual Import and commands.
 // It knows Radarr's API and nothing about discs or jobs.
 package radarr
 
@@ -96,7 +96,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	return nil
 }
 
-// Movie is the subset of Radarr's movie resource Trayarr reads.
+// Movie is the subset of Radarr's movie resource Discern reads.
 type Movie struct {
 	ID        int        `json:"id"`
 	Title     string     `json:"title"`
@@ -115,7 +115,7 @@ type MovieFile struct {
 }
 
 // Quality is Radarr's quality-with-revision object, as read back from a
-// movie file. Only the name is used. What Trayarr sends is the raw object
+// movie file. Only the name is used. What Discern sends is the raw object
 // from QualityNamed.
 type Quality struct {
 	Quality QualityInfo `json:"quality"`
@@ -147,7 +147,7 @@ func (c *Client) LookupTMDb(ctx context.Context, tmdbID int) (*Movie, error) {
 	return &m, nil
 }
 
-// SystemStatus is the part of Radarr's status Trayarr shows.
+// SystemStatus is the part of Radarr's status Discern shows.
 type SystemStatus struct {
 	Version string `json:"version"`
 }
@@ -201,7 +201,7 @@ type NewMovie struct {
 	QualityProfileID int    `json:"qualityProfileId"`
 	RootFolderPath   string `json:"rootFolderPath"`
 	// There is deliberately no Monitored field: AddMovie always adds the
-	// movie unmonitored and without a search, so Trayarr never makes Radarr
+	// movie unmonitored and without a search, so Discern never makes Radarr
 	// download anything.
 }
 
@@ -267,7 +267,7 @@ func (c *Client) QualityNamed(ctx context.Context, name string) (json.RawMessage
 }
 
 // ManualImportScan asks Radarr to scan folder (a path as Radarr sees it) and
-// returns its entries as raw objects. Trayarr sends an entry back with the
+// returns its entries as raw objects. Discern sends an entry back with the
 // movie and quality set, so it keeps every field Radarr filled in.
 func (c *Client) ManualImportScan(ctx context.Context, folder string) ([]map[string]any, error) {
 	var out []map[string]any

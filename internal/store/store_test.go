@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NotNad/trayarr/internal/jobs"
-	"github.com/NotNad/trayarr/internal/makemkv"
+	"github.com/NotNad/discern/internal/jobs"
+	"github.com/NotNad/discern/internal/makemkv"
 )
 
 func openTest(t *testing.T) (*Store, string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "trayarr.db")
+	path := filepath.Join(t.TempDir(), "discern.db")
 	s, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)

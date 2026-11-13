@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NotNad/trayarr/internal/app"
-	"github.com/NotNad/trayarr/internal/jobs"
-	"github.com/NotNad/trayarr/internal/makemkv"
+	"github.com/NotNad/discern/internal/app"
+	"github.com/NotNad/discern/internal/jobs"
+	"github.com/NotNad/discern/internal/makemkv"
 )
 
 // fakeBackend holds a few jobs and records what the UI asked it to do.
@@ -242,7 +242,7 @@ func TestApprove(t *testing.T) {
 	}
 }
 
-// Another website can't make the user's browser press Trayarr's buttons.
+// Another website can't make the user's browser press Discern's buttons.
 func TestCrossSiteFormsAreRefused(t *testing.T) {
 	b := newBackend()
 	srv := newServer(t, b)

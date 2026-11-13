@@ -1,4 +1,4 @@
-// Package jobs moves each disc through Trayarr's steps: scan, identify,
+// Package jobs moves each disc through Discern's steps: scan, identify,
 // select, rip, verify, import (docs/DESIGN.md, section 6).
 //
 // A job's state is saved after every step, so the database, not memory, is
@@ -39,7 +39,7 @@ var transitions = map[State][]State{
 	Ripping:     {Verifying, Failed, Cancelled},
 	Verifying:   {Importing, Failed, Cancelled},
 	// No Cancelled: an import that has started must finish or fail, so
-	// Radarr and Trayarr never disagree about where the file is.
+	// Radarr and Discern never disagree about where the file is.
 	Importing: {Done, Failed},
 	// Retry resumes at the step that failed, or rescans from the start.
 	Failed:    {Detected, Ripping, Verifying, Importing, Cancelled},

@@ -1,5 +1,5 @@
 // Package fake is a stand-in for makemkvcon, for tests and development
-// without a drive. It understands the two commands Trayarr uses, "info" and
+// without a drive. It understands the two commands Discern uses, "info" and
 // "mkv", and behaves as a scenario says: replay a recorded scan, write a rip
 // at a given pace, stall the way MakeMKV 2.0.0 did on a Dolby Vision UHD disc,
 // or freeze completely.
@@ -54,7 +54,7 @@ type Mkv struct {
 	ExitCode     int    `json:"exit_code"`      // exit status after a finished rip
 
 	// JunkLineBytes, if set, prints one line that long before the rip starts,
-	// longer than any robot line Trayarr accepts.
+	// longer than any robot line Discern accepts.
 	JunkLineBytes int `json:"junk_line_bytes"`
 
 	// DebugLog, if set, is written to a temporary file that is then deleted

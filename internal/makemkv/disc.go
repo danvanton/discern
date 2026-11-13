@@ -109,7 +109,7 @@ func (t Title) Segments() ([]int, error) {
 
 // ParseInfo reads the robot output of "makemkvcon -r info" and builds a Disc.
 // It fails closed: a malformed record, a value it cannot read, or a scan with
-// fewer titles than MakeMKV announced is an error, because a scan Trayarr
+// fewer titles than MakeMKV announced is an error, because a scan Discern
 // cannot read completely must not be used to decide what to rip.
 func ParseInfo(r io.Reader) (*Disc, error) {
 	b := newBuilder()

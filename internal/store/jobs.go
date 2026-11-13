@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NotNad/trayarr/internal/jobs"
-	"github.com/NotNad/trayarr/internal/makemkv"
+	"github.com/NotNad/discern/internal/jobs"
+	"github.com/NotNad/discern/internal/makemkv"
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )

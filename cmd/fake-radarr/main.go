@@ -1,5 +1,5 @@
 // Command fake-radarr runs the in-memory stand-in for Radarr
-// (internal/radarr/radarrtest) on a port, so Trayarr can be run and clicked
+// (internal/radarr/radarrtest) on a port, so Discern can be run and clicked
 // through on a development machine without a real Radarr.
 //
 //	fake-radarr -listen :7878 -staging ./dev/staging -library ./dev/library
@@ -15,12 +15,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/NotNad/trayarr/internal/radarr/radarrtest"
+	"github.com/NotNad/discern/internal/radarr/radarrtest"
 )
 
 func main() {
 	listen := flag.String("listen", "127.0.0.1:7878", "address to listen on")
-	staging := flag.String("staging", "dev/staging", "Trayarr's staging folder")
+	staging := flag.String("staging", "dev/staging", "Discern's staging folder")
 	remote := flag.String("remote", "", "the staging folder as Radarr would see it (default: same as -staging)")
 	library := flag.String("library", "dev/library", "where imported files go")
 	flag.Parse()

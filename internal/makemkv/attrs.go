@@ -4,7 +4,7 @@ package makemkv
 // SINFO line carries. The numbers come from the AP_ItemAttributeId enum in
 // apdefs.h in the open-source makemkv-oss package.
 //
-// Only the attributes Trayarr reads are named here. Every attribute is still
+// Only the attributes Discern reads are named here. Every attribute is still
 // kept in the Attrs maps, so nothing is lost if MakeMKV adds new ones.
 // Check these against apdefs.h whenever the pinned MakeMKV version changes.
 type Attr int

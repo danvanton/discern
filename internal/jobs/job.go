@@ -3,10 +3,10 @@ package jobs
 import (
 	"time"
 
-	"github.com/NotNad/trayarr/internal/makemkv"
+	"github.com/NotNad/discern/internal/makemkv"
 )
 
-// Job is one disc's trip through Trayarr.
+// Job is one disc's trip through Discern.
 type Job struct {
 	ID    int64
 	Drive string // device path, e.g. "/dev/sr0"

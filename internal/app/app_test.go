@@ -1,4 +1,4 @@
-// End-to-end tests: every real part of Trayarr (store, engine, steps,
+// End-to-end tests: every real part of Discern (store, engine, steps,
 // makemkvcon runner, Radarr importer, app), with two stand-ins: the fake
 // makemkvcon (played by this test binary) and the fake Radarr.
 package app
@@ -16,14 +16,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NotNad/trayarr/internal/importer"
-	"github.com/NotNad/trayarr/internal/jobs"
-	"github.com/NotNad/trayarr/internal/makemkv"
-	"github.com/NotNad/trayarr/internal/makemkv/fake"
-	"github.com/NotNad/trayarr/internal/radarr"
-	"github.com/NotNad/trayarr/internal/radarr/radarrtest"
-	"github.com/NotNad/trayarr/internal/steps"
-	"github.com/NotNad/trayarr/internal/store"
+	"github.com/NotNad/discern/internal/importer"
+	"github.com/NotNad/discern/internal/jobs"
+	"github.com/NotNad/discern/internal/makemkv"
+	"github.com/NotNad/discern/internal/makemkv/fake"
+	"github.com/NotNad/discern/internal/radarr"
+	"github.com/NotNad/discern/internal/radarr/radarrtest"
+	"github.com/NotNad/discern/internal/steps"
+	"github.com/NotNad/discern/internal/store"
 )
 
 func TestMain(m *testing.M) {
@@ -58,7 +58,7 @@ type world struct {
 	cancel  context.CancelFunc
 }
 
-// newWorld builds Trayarr with the fakes. ripDelay slows the fake rip so a
+// newWorld builds Discern with the fakes. ripDelay slows the fake rip so a
 // test can interrupt it.
 func newWorld(t *testing.T, ripDelay int, db string) *world {
 	t.Helper()
@@ -67,7 +67,7 @@ func newWorld(t *testing.T, ripDelay int, db string) *world {
 	os.WriteFile(scanFile, []byte(scan), 0o644)
 	staging := filepath.Join(dir, "staging")
 	if db == "" {
-		db = filepath.Join(dir, "trayarr.db")
+		db = filepath.Join(dir, "discern.db")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -160,7 +160,7 @@ func TestADiscGoesFromTrayToRadarr(t *testing.T) {
 	}
 }
 
-// Shutting Trayarr down mid-rip and starting it again finishes the job.
+// Shutting Discern down mid-rip and starting it again finishes the job.
 func TestShutdownMidRipThenRestartFinishesTheJob(t *testing.T) {
 	w := newWorld(t, 50, "") // 16 chunks x 50 ms: under a second of ripping
 	ctx := context.Background()
@@ -184,7 +184,7 @@ func TestShutdownMidRipThenRestartFinishesTheJob(t *testing.T) {
 	if err := w2.app.Resume(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// The restarted Trayarr has its own fake Radarr and staging folder: the
+	// The restarted Discern has its own fake Radarr and staging folder: the
 	// job must rip again from scratch and finish.
 	w2.waitFor(t, j.ID, jobs.Done)
 }

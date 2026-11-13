@@ -1,4 +1,4 @@
-// Command trayarr is the Trayarr server: it watches optical drives, rips the
+// Command discern is the Discern server: it watches optical drives, rips the
 // chosen titles with MakeMKV and imports them into Radarr. Settings come from
 // environment variables (internal/config).
 package main
@@ -15,16 +15,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/NotNad/trayarr/internal/app"
-	"github.com/NotNad/trayarr/internal/config"
-	"github.com/NotNad/trayarr/internal/drive"
-	"github.com/NotNad/trayarr/internal/importer"
-	"github.com/NotNad/trayarr/internal/jobs"
-	"github.com/NotNad/trayarr/internal/makemkv"
-	"github.com/NotNad/trayarr/internal/radarr"
-	"github.com/NotNad/trayarr/internal/steps"
-	"github.com/NotNad/trayarr/internal/store"
-	"github.com/NotNad/trayarr/internal/web"
+	"github.com/NotNad/discern/internal/app"
+	"github.com/NotNad/discern/internal/config"
+	"github.com/NotNad/discern/internal/drive"
+	"github.com/NotNad/discern/internal/importer"
+	"github.com/NotNad/discern/internal/jobs"
+	"github.com/NotNad/discern/internal/makemkv"
+	"github.com/NotNad/discern/internal/radarr"
+	"github.com/NotNad/discern/internal/steps"
+	"github.com/NotNad/discern/internal/store"
+	"github.com/NotNad/discern/internal/web"
 )
 
 // checkStagingFilesystem warns when staging and the library are on different
@@ -33,7 +33,7 @@ import (
 // long copy can outlast the import timeout.
 func checkStagingFilesystem(log *slog.Logger, staging, library string) {
 	if library == "" {
-		log.Info("TRAYARR_LIBRARY_DIR is not set, so Trayarr can't check that staging and the library share a filesystem")
+		log.Info("DISCERN_LIBRARY_DIR is not set, so Discern can't check that staging and the library share a filesystem")
 		return
 	}
 	same, err := sameFilesystem(staging, library)
@@ -52,7 +52,7 @@ var version = "dev"
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	if err := run(log); err != nil {
-		log.Error("trayarr stopped", "err", err)
+		log.Error("discern stopped", "err", err)
 		os.Exit(1)
 	}
 }
@@ -75,7 +75,7 @@ func run(log *slog.Logger) error {
 		}
 	}
 	checkStagingFilesystem(log, cfg.StagingDir, cfg.LibraryDir)
-	st, err := store.Open(ctx, filepath.Join(cfg.DataDir, "trayarr.db"))
+	st, err := store.Open(ctx, filepath.Join(cfg.DataDir, "discern.db"))
 	if err != nil {
 		return fmt.Errorf("opening the database: %w", err)
 	}
@@ -118,7 +118,7 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	if cfg.NoAuth {
-		log.Warn("the web UI has no login (TRAYARR_INSECURE_NO_AUTH): use this for development only")
+		log.Warn("the web UI has no login (DISCERN_INSECURE_NO_AUTH): use this for development only")
 	}
 	srv := &http.Server{
 		Addr:              cfg.Listen,

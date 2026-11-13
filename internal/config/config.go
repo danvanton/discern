@@ -1,4 +1,4 @@
-// Package config reads Trayarr's settings from environment variables, so a
+// Package config reads Discern's settings from environment variables, so a
 // container can be configured entirely from its compose file. Secrets can
 // come from files instead (Docker secrets): set NAME_FILE to a path, and the
 // file's content is used for NAME.
@@ -19,7 +19,7 @@ type Config struct {
 	Listen     string        // address for the web UI, e.g. ":8790"
 	DataDir    string        // database and other state
 	StagingDir string        // where rips wait to be imported; same filesystem as the library
-	LibraryDir string        // optional: the movie library as Trayarr sees it, to check the filesystem
+	LibraryDir string        // optional: the movie library as Discern sees it, to check the filesystem
 	MakeMKVCon string        // path to makemkvcon
 	Drives     []string      // optical drives to watch
 	DrivePoll  time.Duration // how often drives are checked
@@ -48,54 +48,54 @@ type (
 func Load(getenv Getenv, readFile ReadFile) (Config, error) {
 	r := reader{getenv: getenv, readFile: readFile}
 	c := Config{
-		Listen:     r.str("TRAYARR_LISTEN", ":8790"),
-		DataDir:    r.str("TRAYARR_DATA_DIR", "/config"),
-		StagingDir: r.str("TRAYARR_STAGING_DIR", "/media/staging"),
-		LibraryDir: r.str("TRAYARR_LIBRARY_DIR", ""),
-		MakeMKVCon: r.str("TRAYARR_MAKEMKVCON", "makemkvcon"),
-		Drives:     r.list("TRAYARR_DRIVES", "/dev/sr0"),
-		DrivePoll:  r.duration("TRAYARR_DRIVE_POLL", 2*time.Second),
-		Eject:      r.boolean("TRAYARR_EJECT", true),
+		Listen:     r.str("DISCERN_LISTEN", ":8790"),
+		DataDir:    r.str("DISCERN_DATA_DIR", "/config"),
+		StagingDir: r.str("DISCERN_STAGING_DIR", "/media/staging"),
+		LibraryDir: r.str("DISCERN_LIBRARY_DIR", ""),
+		MakeMKVCon: r.str("DISCERN_MAKEMKVCON", "makemkvcon"),
+		Drives:     r.list("DISCERN_DRIVES", "/dev/sr0"),
+		DrivePoll:  r.duration("DISCERN_DRIVE_POLL", 2*time.Second),
+		Eject:      r.boolean("DISCERN_EJECT", true),
 
-		RadarrURL:            r.str("TRAYARR_RADARR_URL", ""),
-		RadarrAPIKey:         r.secret("TRAYARR_RADARR_API_KEY"),
-		RadarrRootFolder:     r.str("TRAYARR_RADARR_ROOT_FOLDER", ""),
-		RadarrQualityProfile: r.str("TRAYARR_RADARR_QUALITY_PROFILE", "Any"),
+		RadarrURL:            r.str("DISCERN_RADARR_URL", ""),
+		RadarrAPIKey:         r.secret("DISCERN_RADARR_API_KEY"),
+		RadarrRootFolder:     r.str("DISCERN_RADARR_ROOT_FOLDER", ""),
+		RadarrQualityProfile: r.str("DISCERN_RADARR_QUALITY_PROFILE", "Any"),
 
-		Username: r.str("TRAYARR_USERNAME", ""),
-		Password: r.secret("TRAYARR_PASSWORD"),
-		NoAuth:   r.boolean("TRAYARR_INSECURE_NO_AUTH", false),
+		Username: r.str("DISCERN_USERNAME", ""),
+		Password: r.secret("DISCERN_PASSWORD"),
+		NoAuth:   r.boolean("DISCERN_INSECURE_NO_AUTH", false),
 	}
 	// Folders are made absolute: the staging path is handed to Radarr, which
-	// can't resolve a path relative to Trayarr's working directory.
-	c.DataDir = r.abs("TRAYARR_DATA_DIR", c.DataDir)
-	c.StagingDir = r.abs("TRAYARR_STAGING_DIR", c.StagingDir)
+	// can't resolve a path relative to Discern's working directory.
+	c.DataDir = r.abs("DISCERN_DATA_DIR", c.DataDir)
+	c.StagingDir = r.abs("DISCERN_STAGING_DIR", c.StagingDir)
 	if c.LibraryDir != "" {
-		c.LibraryDir = r.abs("TRAYARR_LIBRARY_DIR", c.LibraryDir)
+		c.LibraryDir = r.abs("DISCERN_LIBRARY_DIR", c.LibraryDir)
 	}
 	// Radarr usually sees the staging folder at the same path; set this when
 	// its container mounts it elsewhere. It must be absolute: Radarr has no
-	// idea of Trayarr's working directory.
-	c.RadarrStagingDir = r.str("TRAYARR_RADARR_STAGING_DIR", filepath.ToSlash(c.StagingDir))
+	// idea of Discern's working directory.
+	c.RadarrStagingDir = r.str("DISCERN_RADARR_STAGING_DIR", filepath.ToSlash(c.StagingDir))
 	if !strings.HasPrefix(c.RadarrStagingDir, "/") && !filepath.IsAbs(filepath.FromSlash(c.RadarrStagingDir)) {
-		r.fail("TRAYARR_RADARR_STAGING_DIR must be an absolute path, as Radarr sees it (got %q)", c.RadarrStagingDir)
+		r.fail("DISCERN_RADARR_STAGING_DIR must be an absolute path, as Radarr sees it (got %q)", c.RadarrStagingDir)
 	}
 
-	r.require("TRAYARR_RADARR_URL", c.RadarrURL)
-	r.require("TRAYARR_RADARR_API_KEY", c.RadarrAPIKey)
-	r.require("TRAYARR_RADARR_ROOT_FOLDER", c.RadarrRootFolder)
+	r.require("DISCERN_RADARR_URL", c.RadarrURL)
+	r.require("DISCERN_RADARR_API_KEY", c.RadarrAPIKey)
+	r.require("DISCERN_RADARR_ROOT_FOLDER", c.RadarrRootFolder)
 	if !c.NoAuth {
-		r.require("TRAYARR_USERNAME", c.Username)
-		r.require("TRAYARR_PASSWORD", c.Password)
+		r.require("DISCERN_USERNAME", c.Username)
+		r.require("DISCERN_PASSWORD", c.Password)
 		if c.Password != "" && len(c.Password) < 12 {
-			r.fail("TRAYARR_PASSWORD must be at least 12 characters")
+			r.fail("DISCERN_PASSWORD must be at least 12 characters")
 		}
 	}
 	if len(c.Drives) == 0 {
-		r.fail("TRAYARR_DRIVES lists no drives")
+		r.fail("DISCERN_DRIVES lists no drives")
 	}
 	if c.DrivePoll < 500*time.Millisecond {
-		r.fail("TRAYARR_DRIVE_POLL must be at least 500ms")
+		r.fail("DISCERN_DRIVE_POLL must be at least 500ms")
 	}
 	if len(r.errs) > 0 {
 		return Config{}, errors.Join(r.errs...)

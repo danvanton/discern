@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NotNad/trayarr/internal/format"
-	"github.com/NotNad/trayarr/internal/jobs"
-	"github.com/NotNad/trayarr/internal/makemkv"
+	"github.com/NotNad/discern/internal/format"
+	"github.com/NotNad/discern/internal/jobs"
+	"github.com/NotNad/discern/internal/makemkv"
 )
 
 // funcs are the helpers templates can call. Each one formats; none decides.

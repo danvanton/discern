@@ -1,5 +1,5 @@
 // Package makemkv runs makemkvcon and turns its robot-mode output into Go
-// values. It is the only package in Trayarr that knows MakeMKV exists: the
+// values. It is the only package in Discern that knows MakeMKV exists: the
 // rest of the program sees Disc, Title and Stream, never raw output lines.
 package makemkv
 
@@ -98,7 +98,7 @@ type Progress struct {
 // Unknown is a line this parser does not know: an unknown prefix, or a plain
 // text line with no prefix at all (Prefix is then empty). It is returned, not
 // treated as an error, so a newer MakeMKV that adds a record type, or prints
-// a human-readable notice such as an expired key, does not break Trayarr.
+// a human-readable notice such as an expired key, does not break Discern.
 // Its fields are never parsed.
 type Unknown struct {
 	Prefix string

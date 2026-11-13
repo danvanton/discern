@@ -69,7 +69,7 @@ func (c WatchdogConfig) Validate() error {
 	return nil
 }
 
-// DefaultWatchdogConfig is what Trayarr uses unless the user changes it.
+// DefaultWatchdogConfig is what Discern uses unless the user changes it.
 var DefaultWatchdogConfig = WatchdogConfig{
 	Interval:     10 * time.Second,
 	StartupGrace: 5 * time.Minute,

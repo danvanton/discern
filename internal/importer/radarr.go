@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NotNad/trayarr/internal/identify"
-	"github.com/NotNad/trayarr/internal/jobs"
-	"github.com/NotNad/trayarr/internal/radarr"
+	"github.com/NotNad/discern/internal/identify"
+	"github.com/NotNad/discern/internal/jobs"
+	"github.com/NotNad/discern/internal/radarr"
 )
 
-// RadarrConfig is how Trayarr uses one Radarr.
+// RadarrConfig is how Discern uses one Radarr.
 type RadarrConfig struct {
 	// RootFolder is the Radarr root folder new movies are added under, as
 	// Radarr sees it, e.g. "/movies".
@@ -25,7 +25,7 @@ type RadarrConfig struct {
 	// QualityProfile is the name of the profile new movies get. Movies are
 	// added unmonitored, so it only matters for later upgrades.
 	QualityProfile string
-	// Staging maps Trayarr's staging folder to Radarr's view of it.
+	// Staging maps Discern's staging folder to Radarr's view of it.
 	Staging PathMap
 	// CommandTimeout bounds one import from start to verified. Moving a
 	// file is a rename when staging and library share a filesystem (the

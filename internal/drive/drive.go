@@ -81,7 +81,7 @@ type Watcher struct {
 // Run polls until ctx ends.
 //
 // Only a change to DiscOK starts anything. A disc already in the tray when
-// Trayarr starts does not: it may be one that was finished before the
+// Discern starts does not: it may be one that was finished before the
 // restart, and ripping it again would be wrong. The user starts such a disc
 // with the Scan button.
 func (w *Watcher) Run(ctx context.Context) {

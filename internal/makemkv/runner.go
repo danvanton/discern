@@ -40,7 +40,7 @@ type Runner struct {
 	debugLogs   func(pid int) []DebugLog
 }
 
-// NewRunner returns a Runner with Trayarr's defaults.
+// NewRunner returns a Runner with Discern's defaults.
 func NewRunner(bin string) *Runner {
 	return &Runner{
 		Bin:         bin,
@@ -81,7 +81,7 @@ func (e *WatchdogError) Error() string {
 }
 
 // Limits on what is kept from a process's output, so a misbehaving
-// makemkvcon can't make Trayarr use unbounded memory.
+// makemkvcon can't make Discern use unbounded memory.
 const (
 	maxLine        = 1 << 20  // longest robot line accepted
 	keptOutputTail = 64 << 10 // stdout and stderr kept for error reports
