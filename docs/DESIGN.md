@@ -300,7 +300,8 @@ MakeMKV does not always fail loudly. A known case: MakeMKV 2.0.0 on a UHD disc w
 
 Trayarr knows the process ID of every `makemkvcon` it starts. Every 10 s the watchdog compares two counters:
 
-- **Bytes read** by the process, from `/proc/<pid>/io` (`read_bytes`).
+- **Bytes read** by the process, from `/proc/<pid>/io` (`rchar`: every byte its `read()` calls returned). During the real stall `rchar` and `read_bytes` both showed 17.2 MB/s. `rchar` also counts reads served from the page cache, which the fake makemkvcon relies on.
+- Where there is no `/proc` (a Windows or macOS development machine), read counts are unknown. The watchdog then can't tell a stall from a hang, and only the hang rule applies, judged on output alone.
 - **Bytes written**: the output file's size.
 
 | Reading rises | Output grows | Verdict |
@@ -385,7 +386,7 @@ The second route skips MakeMKV's muxer entirely. Opening the backup in MakeMKV i
 |---|---|---|
 | Parser | robot-mode lines into structs | table tests over recorded output in `testdata/` |
 | Selector | decisions on real disc shapes | unit tests, plus the benchmark (section 8) |
-| MakeMKV runner | process handling, timeouts, progress | a fake `makemkvcon`: a small Go program that replays a recorded session, including failures |
+| MakeMKV runner | process handling, timeouts, progress | a fake `makemkvcon` (`internal/makemkv/fake`) that replays a recorded scan and writes rips at a set pace, or stalls or freezes on cue. The test binary plays the fake itself: `TestMain` hands over to it when `FAKE_MAKEMKVCON` is set, so the tests need no separate build. `cmd/fake-makemkvcon` is the same fake as a standalone binary for manual runs |
 | Importer | Radarr/Sonarr calls | `httptest` servers that answer like Radarr, from recorded responses |
 | Jobs | state machine and crash recovery | run a job, kill it at each state, restart, check it resumes correctly |
 | Watchdog | stall and hang detection, evidence capture | the fake `makemkvcon` replays a recorded stall: it keeps reading but stops writing at 640 MiB. The test checks the verdict, the bundle and the switch to Backup + remux |
