@@ -1,0 +1,148 @@
+// Package steps is the real implementation of jobs.Steps: MakeMKV for the
+// disc, Radarr for identifying and importing, the filesystem for the rest.
+// It connects the parts; the decisions live in the parts themselves.
+package steps
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+
+	"github.com/NotNad/trayarr/internal/importer"
+	"github.com/NotNad/trayarr/internal/jobs"
+	"github.com/NotNad/trayarr/internal/makemkv"
+)
+
+// Steps runs each job step against MakeMKV and Radarr.
+type Steps struct {
+	runner *makemkv.Runner
+	radarr *importer.Radarr
+
+	// Tray, if set, tells CheckDisc whether a drive's tray has changed since
+	// a job's scan (drive.Tracker does).
+	Tray interface {
+		Generation(drive string) (uint64, bool)
+	}
+
+	mu      sync.Mutex
+	scanned map[int64]uint64 // job -> the drive's tray generation at its scan
+}
+
+var _ jobs.Steps = (*Steps)(nil)
+
+func New(runner *makemkv.Runner, radarr *importer.Radarr) *Steps {
+	return &Steps{runner: runner, radarr: radarr, scanned: map[int64]uint64{}}
+}
+
+func (s *Steps) Scan(ctx context.Context, j *jobs.Job) (*makemkv.Disc, error) {
+	gen, known := s.trayGeneration(j.Drive)
+	d, err := s.runner.Info(ctx, j.Drive)
+	if err == nil && known {
+		s.mu.Lock()
+		s.scanned[j.ID] = gen
+		s.mu.Unlock()
+	}
+	return d, err
+}
+
+// CheckDisc confirms the drive still holds the job's disc.
+//
+// If the tray hasn't changed since the scan (the drive watcher counts every
+// change), the disc can't have been swapped, and nothing is read. Otherwise
+// (a tray change, a restart since the scan, or a system where drives can't be
+// watched), the drive is rescanned and compared with the job's scan. A rescan
+// can take minutes on a UHD disc, but it is the only reliable test: many discs
+// share a volume label, so the label alone can't tell two discs apart.
+func (s *Steps) CheckDisc(ctx context.Context, j *jobs.Job) error {
+	gen, known := s.trayGeneration(j.Drive)
+	s.mu.Lock()
+	at, scanned := s.scanned[j.ID]
+	s.mu.Unlock()
+	if known && scanned && at == gen {
+		return nil
+	}
+	now, err := s.runner.Info(ctx, j.Drive)
+	if err != nil {
+		return err
+	}
+	if !SameDisc(j.Disc, now) {
+		return jobs.ErrDiscChanged
+	}
+	if known {
+		s.mu.Lock()
+		s.scanned[j.ID] = gen
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+func (s *Steps) trayGeneration(drive string) (uint64, bool) {
+	if s.Tray == nil {
+		return 0, false
+	}
+	return s.Tray.Generation(drive)
+}
+
+func (s *Steps) Identify(ctx context.Context, j *jobs.Job) (*jobs.Movie, error) {
+	return s.radarr.Identify(ctx, j)
+}
+
+func (s *Steps) Select(_ context.Context, j *jobs.Job) (jobs.Selection, error) {
+	return Suggest(j.Disc), nil
+}
+
+// Rip saves each chosen title. makemkvcon needs an empty folder per rip (the
+// watchdog measures everything in it), so each title is ripped into a
+// subfolder and its file then moved up into dir, where Verify and Import
+// look. Progress is reported for all titles together, weighted by size.
+func (s *Steps) Rip(ctx context.Context, j *jobs.Job, dir string, progress func(float64)) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	sizes := titleSizes(j)
+	var total, done int64
+	for _, t := range j.Titles {
+		total += sizes[t]
+	}
+	for _, t := range j.Titles {
+		sub := filepath.Join(dir, fmt.Sprintf(".rip-t%02d", t))
+		size := sizes[t]
+		onProgress := func(p makemkv.Progress) {
+			if progress == nil || p.Max <= 0 || total <= 0 {
+				return
+			}
+			frac := float64(p.Total) / float64(p.Max)
+			progress((float64(done) + frac*float64(size)) / float64(total))
+		}
+		res, err := s.runner.Rip(ctx, j.Drive, t, sub, onProgress)
+		if err != nil {
+			return fmt.Errorf("title %d: %w", t, err)
+		}
+		for _, f := range res.OutputFiles {
+			if err := os.Rename(f, filepath.Join(dir, filepath.Base(f))); err != nil {
+				return err
+			}
+		}
+		if err := os.Remove(sub); err != nil {
+			return err
+		}
+		done += size
+	}
+	return nil
+}
+
+func (s *Steps) Import(ctx context.Context, j *jobs.Job, dir string) error {
+	return s.radarr.Import(ctx, j, dir)
+}
+
+func titleSizes(j *jobs.Job) map[int]int64 {
+	sizes := map[int]int64{}
+	if j.Disc != nil {
+		for _, t := range j.Disc.Titles {
+			sizes[t.Index] = t.SizeBytes
+		}
+	}
+	return sizes
+}

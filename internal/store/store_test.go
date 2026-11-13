@@ -273,3 +273,30 @@ func TestConcurrentUseFinishes(t *testing.T) {
 		}
 	}
 }
+
+func TestRecentJobs(t *testing.T) {
+	s, _ := openTest(t)
+	var ids []int64
+	for i, st := range []jobs.State{jobs.Done, jobs.Failed, jobs.Scanning, jobs.Cancelled} {
+		j, err := s.CreateJob(ctx, fmt.Sprintf("/dev/sr%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.now = func() time.Time { return time.UnixMilli(int64(1000 * (i + 1))) }
+		if err := s.Move(ctx, j, st, ""); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, j.ID)
+	}
+	recent, err := s.RecentJobs(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Newest first, active (scanning) jobs left out, at most 2.
+	if len(recent) != 2 || recent[0].ID != ids[3] || recent[1].ID != ids[1] {
+		t.Errorf("recent = %v, %v", recent[0].ID, recent[1].ID)
+	}
+	if err := s.Ping(ctx); err != nil {
+		t.Error(err)
+	}
+}

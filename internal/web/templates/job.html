@@ -1,0 +1,79 @@
+{{define "title"}}Job #{{.Job.ID}} · Trayarr{{end}}
+
+{{define "content"}}
+<p><a href="/">← All jobs</a></p>
+<h1>{{discName .Job}} <span class="muted">#{{.Job.ID}}</span></h1>
+{{if .Error}}<p class="alert" role="alert">{{.Error}}</p>{{end}}
+
+{{template "status" .}}
+
+{{if waiting .Job.State}}
+<form method="post" action="/jobs/{{.Job.ID}}/approve" class="panel ask">
+  <h2>Check and approve</h2>
+  {{if .Job.Note}}<p>Suggested: {{.Job.Note}}.</p>{{end}}
+  <p>
+    <span class="field">Movie</span>
+    <strong>{{movieName .Job.Movie}}</strong>
+  </p>
+  <p>
+    <label for="tmdb">TMDb id</label>
+    <input id="tmdb" name="tmdb_id" inputmode="numeric" pattern="[0-9]*" value="{{with .Job.Movie}}{{.TMDbID}}{{end}}">
+    <span class="muted small">Change it if the movie is wrong. The id is the number in the movie's address on themoviedb.org.</span>
+  </p>
+  {{template "titles" .}}
+  <button type="submit" class="primary">Rip and import</button>
+</form>
+{{else if .Job.Disc}}
+<section class="panel">
+  <h2>Titles on the disc</h2>
+  {{template "titles" .}}
+</section>
+{{end}}
+
+<section class="panel">
+  <h2>History</h2>
+  <ol class="events">
+    {{range .Events}}
+    <li><span class="muted small">{{when .At}}</span> {{if .From}}{{label .From}} → {{end}}<strong>{{label .To}}</strong>{{if .Note}} <span class="muted">{{.Note}}</span>{{end}}</li>
+    {{end}}
+  </ol>
+</section>
+{{end}}
+
+{{define "status"}}
+<section id="status" class="panel"{{if live .Job.State}} hx-get="/fragments/jobs/{{.Job.ID}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+  <p>{{template "badge" .Job.State}} <span class="muted">on {{.Job.Drive}}</span></p>
+  <p>Movie: <strong>{{movieName .Job.Movie}}</strong>{{with .Job.Movie}} <span class="muted small">TMDb {{.TMDbID}}</span>{{end}}</p>
+  {{if ripping .Job.State}}{{template "progress" .Job.Progress}}<p class="muted small">{{pct .Job.Progress}}%</p>{{end}}
+  {{if and .Job.Note (not (waiting .Job.State))}}<p class="note">{{.Job.Note}}</p>{{end}}
+  <div class="actions">
+    {{if failed .Job.State}}
+    <form method="post" action="/jobs/{{.Job.ID}}/retry"><button type="submit" class="primary">Retry</button></form>
+    {{end}}
+    {{if or (cancellable .Job.State) (failed .Job.State)}}
+    <form method="post" action="/jobs/{{.Job.ID}}/cancel"><button type="submit" class="danger">Cancel job</button></form>
+    {{end}}
+  </div>
+</section>
+{{end}}
+
+{{define "titles"}}
+{{$job := .Job}}{{$pick := waiting .Job.State}}
+<table class="titles">
+  <thead><tr>{{if $pick}}<th>Rip</th>{{end}}<th>#</th><th>Length</th><th>Size</th><th>Chapters</th><th>Playlist</th><th>Video</th><th>Audio</th></tr></thead>
+  <tbody>
+  {{range .Job.Disc.Titles}}
+    <tr{{if chosen $job .Index}} class="chosen"{{end}}>
+      {{if $pick}}<td><input type="checkbox" name="title" value="{{.Index}}" aria-label="Rip title {{.Index}}"{{if chosen $job .Index}} checked{{end}}></td>{{end}}
+      <td>{{.Index}}{{if .MakeMKVMainFeature}} <span class="badge ask" title="MakeMKV marked this as the main feature">main</span>{{end}}</td>
+      <td>{{clock .Duration}}</td>
+      <td>{{bytes .SizeBytes}}</td>
+      <td>{{.Chapters}}</td>
+      <td><code>{{.SourceFile}}</code></td>
+      <td>{{video .}}</td>
+      <td>{{audio .}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}

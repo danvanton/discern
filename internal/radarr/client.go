@@ -134,6 +134,37 @@ func (c *Client) Lookup(ctx context.Context, term string) ([]Movie, error) {
 	return out, err
 }
 
+// LookupTMDb looks one movie up on TMDb by its id, for when the user types
+// the id to correct an identification.
+func (c *Client) LookupTMDb(ctx context.Context, tmdbID int) (*Movie, error) {
+	var m Movie
+	if err := c.do(ctx, http.MethodGet, "/movie/lookup/tmdb", url.Values{"tmdbId": {strconv.Itoa(tmdbID)}}, nil, &m); err != nil {
+		return nil, err
+	}
+	if m.TMDbID != tmdbID {
+		return nil, fmt.Errorf("TMDb has no movie %d", tmdbID)
+	}
+	return &m, nil
+}
+
+// SystemStatus is the part of Radarr's status Trayarr shows.
+type SystemStatus struct {
+	Version string `json:"version"`
+}
+
+// SystemStatus checks that Radarr answers and the key works; the health
+// page uses it.
+func (c *Client) SystemStatus(ctx context.Context) (*SystemStatus, error) {
+	var s SystemStatus
+	if err := c.do(ctx, http.MethodGet, "/system/status", nil, nil, &s); err != nil {
+		return nil, err
+	}
+	if s.Version == "" {
+		return nil, errors.New("radarr answered without a version")
+	}
+	return &s, nil
+}
+
 // MovieByTMDb returns the library's movie with this TMDb id, or nil if the
 // library doesn't have it. It filters the answer itself, so it is correct
 // even if a Radarr version ignores the tmdbId parameter and lists every movie.

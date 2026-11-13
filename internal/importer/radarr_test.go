@@ -12,12 +12,14 @@ import (
 	"github.com/NotNad/trayarr/internal/jobs"
 	"github.com/NotNad/trayarr/internal/makemkv"
 	"github.com/NotNad/trayarr/internal/radarr"
+	"github.com/NotNad/trayarr/internal/radarr/radarrtest"
 )
 
 var ctx = context.Background()
 
 type setup struct {
-	fake    *fakeRadarr
+	fake    *radarrtest.Server
+	url     string
 	imp     *Radarr
 	staging string // the job's staging folder, with one rip in it
 	job     *jobs.Job
@@ -29,8 +31,8 @@ func newSetup(t *testing.T) *setup {
 	t.Helper()
 	root := t.TempDir()
 	paths := PathMap{Local: root, Remote: "/data/staging"}
-	fake := newFakeRadarr(t, paths)
-	client, err := radarr.New(fake.srv.URL, fake.apiKey)
+	fake, url := radarrtest.NewTest(t, paths.Local, paths.Remote)
+	client, err := radarr.New(url, fake.APIKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +56,7 @@ func newSetup(t *testing.T) *setup {
 			Streams: []makemkv.Stream{{Type: "Video", VideoSize: "3840x2160"}, {Type: "Audio"}},
 		}}},
 	}
-	return &setup{fake: fake, imp: imp, staging: staging, job: job}
+	return &setup{fake: fake, url: url, imp: imp, staging: staging, job: job}
 }
 
 func (s *setup) stagedFile() string { return filepath.Join(s.staging, "The Matrix_t00.mkv") }
@@ -68,10 +70,10 @@ func TestImportAddsTheMovieUnmonitoredAndImports(t *testing.T) {
 	}
 
 	// The add must never make Radarr search or download.
-	if len(s.fake.added) != 1 {
-		t.Fatalf("added %d movies, want 1", len(s.fake.added))
+	if len(s.fake.Added()) != 1 {
+		t.Fatalf("added %d movies, want 1", len(s.fake.Added()))
 	}
-	add := s.fake.added[0]
+	add := s.fake.Added()[0]
 	opts, _ := add["addOptions"].(map[string]any)
 	if add["monitored"] != false || opts["searchForMovie"] != false || opts["monitor"] != "none" {
 		t.Errorf("movie added as %v: must be unmonitored with no search", add)
@@ -81,7 +83,7 @@ func TestImportAddsTheMovieUnmonitoredAndImports(t *testing.T) {
 	}
 
 	// The import: a move, of Radarr's path for the file, as Remux-2160p.
-	cmd := s.fake.imports[0]
+	cmd := s.fake.Imports()[0]
 	file := cmd["files"].([]any)[0].(map[string]any)
 	quality := file["quality"].(map[string]any)
 	if cmd["importMode"] != "move" || file["path"] != "/data/staging/42/The Matrix_t00.mkv" ||
@@ -94,18 +96,18 @@ func TestImportAddsTheMovieUnmonitoredAndImports(t *testing.T) {
 	if exists(s.stagedFile()) {
 		t.Error("file is still in staging")
 	}
-	if s.fake.badKeys != 0 {
-		t.Errorf("%d requests went without the API key header", s.fake.badKeys)
+	if s.fake.BadKeys() != 0 {
+		t.Errorf("%d requests went without the API key header", s.fake.BadKeys())
 	}
 }
 
 func TestImportUsesAMovieAlreadyInTheLibrary(t *testing.T) {
 	s := newSetup(t)
-	s.fake.addLibraryMovie(603, "The Matrix", 1999, false)
+	s.fake.AddLibraryMovie(603, "The Matrix", 1999, false)
 	if err := s.imp.Import(ctx, s.job, s.staging); err != nil {
 		t.Fatal(err)
 	}
-	if len(s.fake.added) != 0 {
+	if len(s.fake.Added()) != 0 {
 		t.Error("added a movie the library already had")
 	}
 }
@@ -114,12 +116,12 @@ func TestImportUsesAMovieAlreadyInTheLibrary(t *testing.T) {
 // is sent and the rip stays where it is.
 func TestImportRefusesToReplaceAFile(t *testing.T) {
 	s := newSetup(t)
-	s.fake.addLibraryMovie(603, "The Matrix", 1999, true)
+	s.fake.AddLibraryMovie(603, "The Matrix", 1999, true)
 	err := s.imp.Import(ctx, s.job, s.staging)
 	if err == nil || !strings.Contains(err.Error(), "already has a file") {
 		t.Fatalf("err = %v, want a refusal", err)
 	}
-	if len(s.fake.imports) != 0 || !exists(s.stagedFile()) {
+	if len(s.fake.Imports()) != 0 || !exists(s.stagedFile()) {
 		t.Error("something was imported or moved anyway")
 	}
 }
@@ -134,8 +136,8 @@ func TestImportAgainAfterItHappenedIsANoOp(t *testing.T) {
 	if err := s.imp.Import(ctx, s.job, s.staging); err != nil {
 		t.Fatalf("second Import: %v", err)
 	}
-	if len(s.fake.imports) != 1 {
-		t.Errorf("sent %d imports, want 1", len(s.fake.imports))
+	if len(s.fake.Imports()) != 1 {
+		t.Errorf("sent %d imports, want 1", len(s.fake.Imports()))
 	}
 }
 
@@ -172,7 +174,7 @@ func TestImportRefusals(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 				t.Fatalf("err = %v, want one containing %q", err, c.wantErr)
 			}
-			if len(s.fake.imports) != 0 || len(s.fake.added) != 0 {
+			if len(s.fake.Imports()) != 0 || len(s.fake.Added()) != 0 {
 				t.Error("sent something to Radarr before refusing")
 			}
 		})
@@ -184,20 +186,20 @@ func TestImportRefusals(t *testing.T) {
 func TestImportFailuresOnRadarrsSide(t *testing.T) {
 	cases := []struct {
 		name    string
-		set     func(*fakeRadarr)
+		b       radarrtest.Behaviour
 		wantErr string
 		kept    bool // the rip should still be in staging
 	}{
-		{"command failed", func(f *fakeRadarr) { f.failImport = true }, "path does not exist", true},
-		{"file stayed", func(f *fakeRadarr) { f.keepFile = true }, "still in staging", true},
-		{"wrong quality", func(f *fakeRadarr) { f.wrongQuality = true }, "expected Remux-2160p", false},
-		{"scan saw nothing", func(f *fakeRadarr) { f.emptyScan = true }, "check the staging path mapping", true},
-		{"never finishes", func(f *fakeRadarr) { f.neverFinish = true }, "still started", true},
+		{"command failed", radarrtest.Behaviour{FailImport: true}, "path does not exist", true},
+		{"file stayed", radarrtest.Behaviour{KeepFile: true}, "still in staging", true},
+		{"wrong quality", radarrtest.Behaviour{WrongQuality: true}, "expected Remux-2160p", false},
+		{"scan saw nothing", radarrtest.Behaviour{EmptyScan: true}, "check the staging path mapping", true},
+		{"never finishes", radarrtest.Behaviour{NeverFinish: true}, "still started", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := newSetup(t)
-			c.set(s.fake)
+			s.fake.SetBehaviour(c.b)
 			s.imp.cfg.CommandTimeout = 300 * time.Millisecond
 			err := s.imp.Import(ctx, s.job, s.staging)
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
@@ -212,7 +214,7 @@ func TestImportFailuresOnRadarrsSide(t *testing.T) {
 
 func TestWrongAPIKeyIsAClearError(t *testing.T) {
 	s := newSetup(t)
-	client, _ := radarr.New(s.fake.srv.URL, "wrong")
+	client, _ := radarr.New(s.url, "wrong")
 	imp, _ := NewRadarr(client, s.imp.cfg)
 	err := imp.Import(ctx, s.job, s.staging)
 	var apiErr *radarr.APIError
@@ -226,10 +228,10 @@ func TestWrongAPIKeyIsAClearError(t *testing.T) {
 
 func TestIdentify(t *testing.T) {
 	s := newSetup(t)
-	s.fake.lookup = []map[string]any{
-		{"tmdbId": 1, "title": "Spider-Man 3", "year": 2017}, // a different film first
-		{"tmdbId": 559, "title": "Spider-Man 3", "year": 2007},
-	}
+	s.fake.SetLookup(
+		map[string]any{"tmdbId": 1, "title": "Spider-Man 3", "year": 2017}, // a different film first
+		map[string]any{"tmdbId": 559, "title": "Spider-Man 3", "year": 2007},
+	)
 	s.job.Disc.Volume = "Spider-Man 3 (2007)"
 	m, err := s.imp.Identify(ctx, s.job)
 	if err != nil {
@@ -239,7 +241,7 @@ func TestIdentify(t *testing.T) {
 		t.Errorf("identified %+v, want the 2007 film (559)", m)
 	}
 
-	s.fake.lookup = nil
+	s.fake.SetLookup()
 	if m, err := s.imp.Identify(ctx, s.job); err != nil || m != nil {
 		t.Errorf("no results: got %+v, %v; want nil, nil (the user picks)", m, err)
 	}
@@ -308,7 +310,7 @@ func TestNewRadarrRequiresItsSettings(t *testing.T) {
 // the user had an older copy of the movie.
 func TestMissingRipWithAnOlderLibraryFileIsAnError(t *testing.T) {
 	s := newSetup(t)
-	s.fake.addLibraryMovie(603, "The Matrix", 1999, true) // dateAdded 2020
+	s.fake.AddLibraryMovie(603, "The Matrix", 1999, true) // dateAdded 2020
 	os.Remove(s.stagedFile())
 	err := s.imp.Import(ctx, s.job, s.staging)
 	if err == nil || !strings.Contains(err.Error(), "older than this job") {
@@ -319,12 +321,12 @@ func TestMissingRipWithAnOlderLibraryFileIsAnError(t *testing.T) {
 // If Radarr can't see the staging folder, nothing is added to its library.
 func TestFailedScanAddsNothing(t *testing.T) {
 	s := newSetup(t)
-	s.fake.emptyScan = true
+	s.fake.SetBehaviour(radarrtest.Behaviour{EmptyScan: true})
 	if err := s.imp.Import(ctx, s.job, s.staging); err == nil {
 		t.Fatal("import succeeded with an empty scan")
 	}
-	if len(s.fake.added) != 0 {
-		t.Errorf("added %d movies before finding the file", len(s.fake.added))
+	if len(s.fake.Added()) != 0 {
+		t.Errorf("added %d movies before finding the file", len(s.fake.Added()))
 	}
 }
 
@@ -332,13 +334,13 @@ func TestFailedScanAddsNothing(t *testing.T) {
 // instead of starting a second one for the same file.
 func TestRetryJoinsTheRunningImport(t *testing.T) {
 	s := newSetup(t)
-	s.fake.addLibraryMovie(603, "The Matrix", 1999, false)
-	s.fake.runningImport("/data/staging/42/The Matrix_t00.mkv", 1)
+	s.fake.AddLibraryMovie(603, "The Matrix", 1999, false)
+	s.fake.RunningImport("/data/staging/42/The Matrix_t00.mkv", 1)
 	if err := s.imp.Import(ctx, s.job, s.staging); err != nil {
 		t.Fatal(err)
 	}
-	if len(s.fake.imports) != 0 {
-		t.Errorf("started %d new imports, want 0: the running one should have been reused", len(s.fake.imports))
+	if len(s.fake.Imports()) != 0 {
+		t.Errorf("started %d new imports, want 0: the running one should have been reused", len(s.fake.Imports()))
 	}
 	if exists(s.stagedFile()) {
 		t.Error("the running import didn't move the file")
@@ -347,17 +349,17 @@ func TestRetryJoinsTheRunningImport(t *testing.T) {
 
 func TestIdentifyLabelsThatSayNothing(t *testing.T) {
 	s := newSetup(t)
-	s.fake.lookup = []map[string]any{{"tmdbId": 9, "title": "Video", "year": 2001}}
+	s.fake.SetLookup(map[string]any{"tmdbId": 9, "title": "Video", "year": 2001})
 	s.job.Disc.Volume, s.job.Disc.Name = "DVD_VIDEO", ""
 	if m, err := s.imp.Identify(ctx, s.job); err != nil || m != nil {
 		t.Errorf("generic label: got %+v, %v; want nil, nil", m, err)
 	}
-	if s.fake.lookups != 0 {
-		t.Errorf("searched Radarr %d times for a generic label", s.fake.lookups)
+	if s.fake.Lookups() != 0 {
+		t.Errorf("searched Radarr %d times for a generic label", s.fake.Lookups())
 	}
 
 	// A generic volume label with a useful disc name uses the name.
-	s.fake.lookup = []map[string]any{{"tmdbId": 603, "title": "The Matrix", "year": 1999}}
+	s.fake.SetLookup(map[string]any{"tmdbId": 603, "title": "The Matrix", "year": 1999})
 	s.job.Disc.Volume, s.job.Disc.Name = "BD_ROM", "The Matrix"
 	if m, err := s.imp.Identify(ctx, s.job); err != nil || m == nil || m.TMDbID != 603 {
 		t.Errorf("fell back to the disc name: got %+v, %v", m, err)

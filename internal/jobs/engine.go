@@ -230,7 +230,10 @@ func (e *Engine) failIn(ctx context.Context, j *Job, resumeIn State, what string
 }
 
 // Approve is the user's answer in NeedsYou: rip these titles.
-func (e *Engine) Approve(ctx context.Context, id int64, titles []int) error {
+//
+// movie, if not nil, replaces the identified movie: the user corrected it.
+// A job can't be approved without a movie, because the import needs one.
+func (e *Engine) Approve(ctx context.Context, id int64, titles []int, movie *Movie) error {
 	j, err := e.store.Job(ctx, id)
 	if err != nil {
 		return err
@@ -243,6 +246,15 @@ func (e *Engine) Approve(ctx context.Context, id int64, titles []int) error {
 	}
 	if err := checkTitles(j.Disc, titles); err != nil {
 		return err
+	}
+	if movie != nil {
+		if movie.TMDbID <= 0 {
+			return errors.New("the movie needs a TMDb id")
+		}
+		j.Movie = movie
+	}
+	if j.Movie == nil {
+		return errors.New("choose the movie first: the import needs to know which one it is")
 	}
 	j.Titles, j.Note = slices.Clone(titles), ""
 	return e.move(ctx, j, Ripping, fmt.Sprintf("approved titles %v", titles))

@@ -2,6 +2,7 @@ package makemkv
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -186,5 +187,23 @@ func TestParseDuration(t *testing.T) {
 		if got, err := parseDuration(in); err == nil {
 			t.Errorf("parseDuration(%q) = %v, want an error", in, got)
 		}
+	}
+}
+
+// Every scan in testdata must parse: the demo and the tests rely on them.
+func TestAllTestdataScansParse(t *testing.T) {
+	files, _ := filepath.Glob("../../testdata/makemkv/info-*.txt")
+	if len(files) == 0 {
+		t.Fatal("no scans in testdata")
+	}
+	for _, f := range files {
+		r, err := os.Open(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ParseInfo(r); err != nil {
+			t.Errorf("%s: %v", filepath.Base(f), err)
+		}
+		r.Close()
 	}
 }

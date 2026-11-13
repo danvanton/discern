@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/NotNad/trayarr/internal/format"
 )
 
 // Evidence is what the watchdog saves about a rip before stopping it: enough
@@ -113,22 +115,9 @@ func describe(v Verdict, samples []Sample) string {
 	switch v {
 	case Stalled:
 		return fmt.Sprintf("output stood still at %s for %s while %s more was read",
-			humanBytes(last.WrittenBytes), still, humanBytes(last.ReadBytes-grewRead))
+			format.Bytes(last.WrittenBytes), still, format.Bytes(last.ReadBytes-grewRead))
 	case Hung:
-		return fmt.Sprintf("nothing was read or written for %s; output at %s", still, humanBytes(last.WrittenBytes))
+		return fmt.Sprintf("nothing was read or written for %s; output at %s", still, format.Bytes(last.WrittenBytes))
 	}
 	return v.String()
-}
-
-func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }

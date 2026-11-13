@@ -94,6 +94,31 @@ func (s *Store) ActiveJobs(ctx context.Context) ([]*jobs.Job, error) {
 	return out, rows.Err()
 }
 
+// RecentJobs returns up to limit jobs that are no longer active (done,
+// failed or cancelled), most recently changed first, for the history list.
+func (s *Store) RecentJobs(ctx context.Context, limit int) ([]*jobs.Job, error) {
+	marks := strings.TrimSuffix(strings.Repeat("?, ", len(inactiveStates)), ", ")
+	args := append(append([]any{}, inactiveStates...), limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+jobColumns+` FROM jobs
+		WHERE state IN (`+marks+`) ORDER BY updated_at DESC, id DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*jobs.Job
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+// Ping checks the database answers, for the health check.
+func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
+
 func (s *Store) Move(ctx context.Context, j *jobs.Job, to jobs.State, note string) error {
 	disc, err := jsonOrNull(j.Disc)
 	if err != nil {

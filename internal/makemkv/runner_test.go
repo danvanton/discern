@@ -50,7 +50,7 @@ func testRunner(t *testing.T, sc fake.Scenario) *Runner {
 	r := NewRunner(exe)
 	r.Watchdog = fastWatchdog
 	r.KillAfter = 2 * time.Second
-	r.env = []string{fake.EnvVar + "=" + string(raw)}
+	r.Env = []string{fake.EnvVar + "=" + string(raw)}
 	return r
 }
 

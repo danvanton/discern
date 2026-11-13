@@ -1,0 +1,52 @@
+{{define "title"}}Trayarr{{end}}
+
+{{define "content"}}
+{{if .Error}}<p class="alert" role="alert">{{.Error}}</p>{{end}}
+
+<section class="panel">
+  <h2>Drives</h2>
+  <ul class="drives">
+    {{range .Drives}}
+    <li>
+      <code>{{.Path}}</code>
+      {{if .Pending}}<span class="badge ask" title="It starts when the drive's current job ends">new disc waiting</span>{{end}}
+      <form method="post" action="/drives/scan">
+        <input type="hidden" name="drive" value="{{.Path}}">
+        <button type="submit">Scan disc</button>
+      </form>
+    </li>
+    {{end}}
+  </ul>
+  <p class="muted small">A disc going in starts on its own. Use Scan disc for one that was already in the drive when Trayarr started.</p>
+  <div id="health" hx-get="/fragments/health" hx-trigger="load, every 60s">Checking MakeMKV and Radarr…</div>
+</section>
+
+{{template "jobs" .}}
+{{end}}
+
+{{define "jobs"}}
+<div id="jobs" hx-get="/fragments/jobs" hx-trigger="every 2s" hx-swap="outerHTML">
+  {{if .Waiting}}
+  <section class="panel ask">
+    <h2>Needs you</h2>
+    {{template "joblist" .Waiting}}
+  </section>
+  {{end}}
+  <section class="panel">
+    <h2>Working</h2>
+    {{if .Active}}{{template "joblist" .Active}}
+    {{else}}<p class="muted">Nothing is ripping. Put a disc in a drive.</p>{{end}}
+  </section>
+  <section class="panel">
+    <h2>History</h2>
+    {{if .Recent}}{{template "joblist" .Recent}}
+    {{else}}<p class="muted">No finished jobs yet.</p>{{end}}
+  </section>
+</div>
+{{end}}
+
+{{define "health"}}
+<ul class="checks">
+  {{range .}}<li class="{{if .OK}}ok{{else}}bad{{end}}"><strong>{{.Name}}</strong> {{if .OK}}✓{{else}}✗{{end}} <span class="muted small">{{.Detail}}</span></li>{{end}}
+</ul>
+{{end}}

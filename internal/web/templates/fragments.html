@@ -1,0 +1,26 @@
+{{define "badge"}}<span class="badge {{kind .}}">{{label .}}</span>{{end}}
+
+{{/* A native progress element: no inline style needed, which the strict
+     Content-Security-Policy would block. */}}
+{{define "progress"}}<progress class="bar" max="100" value="{{pct .}}">{{pct .}}%</progress>{{end}}
+
+{{define "joblist"}}
+<table class="jobs">
+  <thead><tr><th>Job</th><th>Disc</th><th>Movie</th><th>State</th><th>Changed</th></tr></thead>
+  <tbody>
+  {{range .}}
+    <tr>
+      <td><a href="/jobs/{{.ID}}">#{{.ID}}</a></td>
+      <td>{{discName .}}<div class="muted small">{{.Drive}}</div></td>
+      <td>{{movieName .Movie}}</td>
+      <td>
+        {{template "badge" .State}}
+        {{if ripping .State}}{{template "progress" .Progress}}{{end}}
+        {{if .Note}}<div class="muted small">{{.Note}}</div>{{end}}
+      </td>
+      <td class="muted small" title="{{when .UpdatedAt}}">{{ago .UpdatedAt}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}

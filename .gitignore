@@ -19,3 +19,6 @@ Thumbs.db
 # Secrets: never commit these
 .env
 *.env
+
+# Local demo folders (see the README)
+/dev/

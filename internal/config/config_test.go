@@ -1,0 +1,167 @@
+package config
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func env(m map[string]string) Getenv { return func(k string) string { return m[k] } }
+
+func files(m map[string]string) ReadFile {
+	return func(p string) ([]byte, error) {
+		if v, ok := m[p]; ok {
+			return []byte(v), nil
+		}
+		return nil, os.ErrNotExist
+	}
+}
+
+var minimal = map[string]string{
+	"TRAYARR_RADARR_URL":         "http://radarr:7878",
+	"TRAYARR_RADARR_API_KEY":     "abc",
+	"TRAYARR_RADARR_ROOT_FOLDER": "/movies",
+	"TRAYARR_USERNAME":           "dan",
+	"TRAYARR_PASSWORD":           "correct horse battery",
+}
+
+func with(extra map[string]string) map[string]string {
+	m := map[string]string{}
+	for k, v := range minimal {
+		m[k] = v
+	}
+	for k, v := range extra {
+		if v == "" {
+			delete(m, k)
+		} else {
+			m[k] = v
+		}
+	}
+	return m
+}
+
+func TestDefaults(t *testing.T) {
+	c, err := Load(env(minimal), files(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Listen != ":8790" || c.DataDir != abs(t, "/config") || c.StagingDir != abs(t, "/media/staging") ||
+		c.MakeMKVCon != "makemkvcon" || len(c.Drives) != 1 || c.Drives[0] != "/dev/sr0" ||
+		c.DrivePoll != 2*time.Second || !c.Eject || c.RadarrQualityProfile != "Any" {
+		t.Errorf("defaults = %+v", c)
+	}
+	if c.RadarrStagingDir != filepath.ToSlash(abs(t, "/media/staging")) {
+		t.Errorf("Radarr's staging dir defaults to %q, want the same as Trayarr's", c.RadarrStagingDir)
+	}
+}
+
+func TestSettings(t *testing.T) {
+	c, err := Load(env(with(map[string]string{
+		"TRAYARR_DRIVES":             " /dev/sr0, /dev/sr1 ,",
+		"TRAYARR_DRIVE_POLL":         "5s",
+		"TRAYARR_EJECT":              "false",
+		"TRAYARR_RADARR_STAGING_DIR": "/data/staging",
+	})), files(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(c.Drives, "|") != "/dev/sr0|/dev/sr1" || c.DrivePoll != 5*time.Second || c.Eject ||
+		c.RadarrStagingDir != "/data/staging" {
+		t.Errorf("got %+v", c)
+	}
+}
+
+func TestSecretsFromFiles(t *testing.T) {
+	c, err := Load(env(with(map[string]string{
+		"TRAYARR_RADARR_API_KEY":      "",
+		"TRAYARR_RADARR_API_KEY_FILE": "/run/secrets/radarr",
+		"TRAYARR_PASSWORD":            "",
+		"TRAYARR_PASSWORD_FILE":       "/run/secrets/pw",
+	})), files(map[string]string{
+		"/run/secrets/radarr": "key-from-file\n", // trailing newline, as editors leave it
+		"/run/secrets/pw":     "a long password from a file\r\n",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.RadarrAPIKey != "key-from-file" || c.Password != "a long password from a file" {
+		t.Errorf("secrets = %q, %q", c.RadarrAPIKey, c.Password)
+	}
+}
+
+// Every problem is reported at once.
+func TestProblemsAreAllReported(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"TRAYARR_DRIVE_POLL":    "fast",
+		"TRAYARR_EJECT":         "maybe",
+		"TRAYARR_PASSWORD":      "short",
+		"TRAYARR_PASSWORD_FILE": "/x",
+	}), files(nil))
+	if err == nil {
+		t.Fatal("loaded a config with nothing set")
+	}
+	for _, want := range []string{
+		"TRAYARR_RADARR_URL is required", "TRAYARR_RADARR_API_KEY is required",
+		"TRAYARR_RADARR_ROOT_FOLDER is required", "TRAYARR_USERNAME is required",
+		"not a duration", "not true or false", "TRAYARR_PASSWORD or TRAYARR_PASSWORD_FILE, not both",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error is missing %q:\n%v", want, err)
+		}
+	}
+}
+
+func TestPasswordRules(t *testing.T) {
+	if _, err := Load(env(with(map[string]string{"TRAYARR_PASSWORD": "short"})), files(nil)); err == nil ||
+		!strings.Contains(err.Error(), "at least 12") {
+		t.Errorf("short password: err = %v", err)
+	}
+	// Login can be turned off explicitly for development; then no password is needed.
+	if _, err := Load(env(with(map[string]string{
+		"TRAYARR_USERNAME": "", "TRAYARR_PASSWORD": "", "TRAYARR_INSECURE_NO_AUTH": "true",
+	})), files(nil)); err != nil {
+		t.Errorf("no-auth mode: %v", err)
+	}
+}
+
+func TestMissingSecretFile(t *testing.T) {
+	_, err := Load(env(with(map[string]string{"TRAYARR_RADARR_API_KEY": "", "TRAYARR_RADARR_API_KEY_FILE": "/nope"})), files(nil))
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("err = %v, want the missing file reported", err)
+	}
+}
+
+func abs(t *testing.T, p string) string {
+	t.Helper()
+	a, err := filepath.Abs(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// Relative folders become absolute, so Radarr is never handed a path that
+// only makes sense in Trayarr's working directory.
+func TestRelativeFoldersBecomeAbsolute(t *testing.T) {
+	c, err := Load(env(with(map[string]string{
+		"TRAYARR_STAGING_DIR": "dev/staging", "TRAYARR_DATA_DIR": "dev/config", "TRAYARR_LIBRARY_DIR": "dev/library",
+	})), files(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, p := range map[string]string{"staging": c.StagingDir, "data": c.DataDir, "library": c.LibraryDir} {
+		if !filepath.IsAbs(p) {
+			t.Errorf("%s dir %q is not absolute", name, p)
+		}
+	}
+	if c.RadarrStagingDir != filepath.ToSlash(c.StagingDir) {
+		t.Errorf("Radarr's staging dir = %q, want the absolute staging dir", c.RadarrStagingDir)
+	}
+	if _, err := Load(env(with(map[string]string{"TRAYARR_RADARR_STAGING_DIR": "data/staging"})), files(nil)); err == nil ||
+		!strings.Contains(err.Error(), "must be an absolute path") {
+		t.Errorf("relative Radarr staging dir: err = %v", err)
+	}
+}

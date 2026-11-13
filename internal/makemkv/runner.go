@@ -30,11 +30,14 @@ type Runner struct {
 	// minutes, but never this long.
 	InfoTimeout time.Duration
 
+	// Env holds extra environment variables for makemkvcon, such as
+	// FAKE_MAKEMKVCON when it is the fake (tests and development).
+	Env []string
+
 	// Seams for tests and for operating systems without /proc. They default
 	// to the /proc implementations on Linux.
 	readCounter func(pid int) (int64, error)
 	debugLogs   func(pid int) []DebugLog
-	env         []string // extra environment variables for the process
 }
 
 // NewRunner returns a Runner with Trayarr's defaults.
@@ -246,8 +249,8 @@ func (r *Runner) command(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, r.Bin, args...)
 	cmd.Cancel = func() error { return terminate(cmd.Process) }
 	cmd.WaitDelay = r.KillAfter
-	if len(r.env) > 0 {
-		cmd.Env = append(os.Environ(), r.env...)
+	if len(r.Env) > 0 {
+		cmd.Env = append(os.Environ(), r.Env...)
 	}
 	return cmd
 }

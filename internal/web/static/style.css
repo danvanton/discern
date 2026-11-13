@@ -1,0 +1,157 @@
+/* Trayarr: one small stylesheet, light and dark. */
+
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --text: #1c2330;
+  --muted: #5f6b7a;
+  --line: #dde2e8;
+  --accent: #2d6cdf;
+  --ok: #1f8a4c;
+  --bad: #c2362f;
+  --ask: #b7791f;
+  --busy: #2d6cdf;
+  --off: #7a8594;
+  --radius: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12161c;
+    --panel: #1b2129;
+    --text: #e6e9ee;
+    --muted: #97a2b0;
+    --line: #2c3440;
+    --accent: #6a9ef5;
+    --ok: #4cc47e;
+    --bad: #ef6b63;
+    --ask: #e3b04b;
+    --busy: #6a9ef5;
+    --off: #8792a1;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.brand { font-weight: 700; font-size: 1.1rem; color: var(--text); text-decoration: none; }
+
+main { max-width: 1100px; margin: 0 auto; padding: 1rem; }
+
+h1 { font-size: 1.4rem; margin: 0.25rem 0 1rem; }
+h2 { font-size: 1.05rem; margin: 0 0 0.75rem; }
+
+a { color: var(--accent); }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.panel.ask { border-color: var(--ask); }
+
+.muted { color: var(--muted); }
+.small { font-size: 0.85rem; }
+
+.alert {
+  border: 1px solid var(--bad);
+  color: var(--bad);
+  background: var(--panel);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+}
+
+.note { white-space: pre-wrap; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 0.85rem; color: var(--muted); font-weight: 600; }
+tr.chosen td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+/* Wide tables scroll inside their panel rather than the page. */
+.panel { overflow-x: auto; }
+
+.badge {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: 1px solid currentColor;
+}
+.badge.ok { color: var(--ok); }
+.badge.bad { color: var(--bad); }
+.badge.ask { color: var(--ask); }
+.badge.busy { color: var(--busy); }
+.badge.off { color: var(--off); }
+
+progress.bar {
+  display: block;
+  width: 100%;
+  min-width: 8rem;
+  height: 8px;
+  margin-top: 0.4rem;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--line);
+  accent-color: var(--busy);
+  appearance: none;
+}
+progress.bar::-webkit-progress-bar { background: var(--line); }
+progress.bar::-webkit-progress-value { background: var(--busy); }
+progress.bar::-moz-progress-bar { background: var(--busy); }
+
+.drives { list-style: none; padding: 0; margin: 0 0 0.5rem; display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.drives li { display: flex; align-items: center; gap: 0.5rem; }
+.drives form { margin: 0; }
+
+.checks { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 1rem; }
+.checks .ok strong { color: var(--ok); }
+.checks .bad strong { color: var(--bad); }
+
+.events { padding-left: 1.25rem; margin: 0; }
+
+.actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.actions form { margin: 0; }
+
+label, .field { font-weight: 600; margin-right: 0.5rem; }
+input[name="tmdb_id"] { width: 9rem; }
+
+input, button {
+  font: inherit;
+  color: inherit;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 0.35rem 0.7rem;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { color: var(--bad); border-color: var(--bad); }
+
+form.panel button.primary { margin-top: 1rem; }
+
+@media (max-width: 640px) {
+  main { padding: 0.75rem; }
+  th, td { padding: 0.35rem; }
+}

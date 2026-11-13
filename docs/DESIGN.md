@@ -142,6 +142,38 @@ docs/                 this file, ADRs, user guide
 
 ---
 
+### How v0.1 is wired
+
+```mermaid
+flowchart LR
+    W[drive.Watcher] -->|disc in| A[app.App]
+    UI[web UI] --> A
+    A --> E[jobs.Engine]
+    E --> S[steps.Steps]
+    S --> M[makemkv.Runner]
+    S --> I[importer.Radarr]
+    I --> R[radarr.Client]
+    E --> D[(store)]
+    A --> D
+```
+
+- **`cmd/trayarr`** reads the settings, builds the parts and starts them. On SIGTERM it stops the web server first, so nobody starts new work, then gives running jobs 25 s to reach a safe point. A rip stops and resumes at the next start; an import finishes.
+- **`internal/app`** is the glue:
+  - it starts a job's run when a disc goes in or the user approves or retries;
+  - it resumes unfinished jobs at start;
+  - it ejects the disc when a job is done;
+  - it reports health: the database, makemkvcon and Radarr.
+- **`internal/steps`** is the real `jobs.Steps`:
+  - **Select** suggests MakeMKV's main-feature title, otherwise the longest. It is never automatic in v0.1.
+  - **CheckDisc** first asks the drive watcher whether the tray has changed since the job's scan; the watcher counts every change. If not, the disc can't have been swapped, and nothing is read. Otherwise (a tray change, a restart, or a system where drives can't be watched) it rescans and compares the result with the job's scan. A label alone can't tell discs apart, because generic labels are common.
+  - **Rip** rips each chosen title into its own subfolder (the watchdog needs an empty one) and moves the file up into the job's folder.
+  - **Verify** checks that there is one file per title, and that each is 70–110% of the size the scan gave it. A rip that stopped early fails here: the Kill Bill stall was under 1%. The bounds are wide until real rips have been measured.
+- **`internal/drive`** asks the kernel for the tray state (`CDROM_DRIVE_STATUS`) every 2 s.
+  - Only a *change* to "disc ready" starts a job. A disc already in the tray when Trayarr starts is left alone, because it may be one that was finished before a restart. The UI's Scan disc button starts it.
+  - A disc that goes in while the drive still has a job (one waiting for approval, say) is remembered, and the dashboard marks the drive "new disc waiting". It gets its own job as soon as the current one ends (done, failed or cancelled), and it isn't ejected when the old job finishes.
+  - On Windows and macOS there is no drive control: the Scan button is the only way to start a job.
+- **Running it without hardware.** `cmd/fake-makemkvcon` and `cmd/fake-radarr` stand in for MakeMKV and Radarr. The README shows how to run the whole app with them, and `internal/app`'s end-to-end tests do the same.
+
 ## 5. A disc's journey, step by step
 
 1. **Detect.** `drive` checks each tray every 2 s through the kernel (`/sys/block/srN` and the `CDROM_DRIVE_STATUS` ioctl). It deliberately does **not** ask MakeMKV to list drives: that makes MakeMKV query every drive and can disturb a rip in progress (ARM and Rexarr both document this).
@@ -163,7 +195,7 @@ docs/                 this file, ADRs, user guide
    - **Library:** build the path from a naming template and move the file there. The default (Plex) is `Movies/Title (Year) {tmdb-123}/Title (Year) {tmdb-123}.mkv`, with `{edition-…}` added for editions. There is a Jellyfin preset as well. Trayarr then confirms the file is in place with the right size. It refuses to overwrite an existing file, and can optionally ask Plex or Jellyfin to rescan.
 9. **Finish.** Eject, notify (webhook or Apprise), clean the staging folder.
 
-**Staging lives on the same filesystem as the library**, so the final move is a rename: instant, atomic (a file is either fully there or not at all), and no double disk space. Trayarr checks this at startup and warns if it is not true.
+**Staging lives on the same filesystem as the library**, so the final move is a rename: instant, atomic (a file is either fully there or not at all), and no double disk space. Trayarr checks this at startup and warns if it is not true, when `TRAYARR_LIBRARY_DIR` tells it where the library is: it compares the two folders' filesystem device ids.
 
 ---
 
@@ -244,7 +276,7 @@ stateDiagram-v2
   - `WaitingForSet`: stays waiting, with the finished parts kept in staging.
   - `Importing`: ask Radarr first whether the movie already has the file. Import steps are **idempotent**: running one twice does no harm, because each checks before acting.
   - `NeedsYou`: stays waiting.
-- **Clean shutdown.** On `SIGTERM` (what `docker stop` sends), stop taking new discs, let a running import finish, and stop a running rip cleanly. The job is then resumed at the next start. The container's stop timeout should allow about 30 s.
+- **Clean shutdown.** On `SIGTERM` (what `docker stop` sends), stop taking new discs, let a running import finish, and stop a running rip cleanly. The job is then resumed at the next start. The whole shutdown fits in 8 s (2 s for the web server, 6 s for jobs), inside the 10 s Docker allows after SIGTERM before it kills the container. A job still running then is safe to cut off: its state is saved, an interrupted rip starts again, and an interrupted import is picked up by the next start (the importer recognises a finished import, and joins one still running in Radarr).
 - **One job per drive at a time.** A second disc in the same drive is only seen after the first job leaves the drive. The database enforces this too: a partial unique index on `jobs(drive)` covers only active states, so no bug in Go code can start two jobs on one drive.
 
 ### How it is built (v0.1)
@@ -395,6 +427,7 @@ The second route skips MakeMKV's muxer entirely. Opening the backup in MakeMKV i
 
 - **SQLite** in `/config/trayarr.db` (decision D3): jobs, per-job events, settings. Using the pure-Go driver keeps the binary free of C dependencies.
 - **Config precedence:** defaults < `/config/trayarr.yaml` < environment variables. Environment variables win so a container can be configured entirely from compose.
+  - **v0.1 reads environment variables only** (`internal/config`): every setting is a `TRAYARR_*` variable, and secrets can come from a file through `NAME_FILE`. All problems are reported at once, so a fresh install can be fixed in one pass. The YAML file comes later, if a setting turns out to need it.
 - **Secrets** (API keys, MakeMKV key) come from env vars or, better, `*_FILE` variables pointing at Docker secrets. They are never logged or shown in the UI after saving.
 - **Volumes:** `/config` (database, MakeMKV, TheDiscDB copy) and the media path (staging and library on the same filesystem).
 
@@ -468,12 +501,25 @@ Recordings come from real discs. When a disc behaves oddly in real use, its scan
   - Publish a changelog.
 - **Dependencies:** Renovate opens update pull requests, and CI decides whether each is safe.
 - **Deployment examples:** a compose file, plus notes for running it as a TrueNAS SCALE custom app (device passthrough, dataset layout).
+- **First-deployment check.** No automated test can put a disc in a real drive. The tests do run the Linux drive calls against `/dev/null` in CI, which catches a wrong call but not a wrong answer. So on a new install:
+  1. Open and close the tray, then put a disc in. The log should show `disc inserted` and the dashboard a new job.
+  2. When the job finishes, the tray should open.
 
 ---
 
 ## 15. Security
 
 - **Login by default** on the web UI (one user, hashed password). The API uses keys.
+  - **v0.1 uses HTTP Basic authentication:** a username and password from the environment, at least 12 characters, compared in constant time. A login page comes later. Turning the login off needs an explicit `TRAYARR_INSECURE_NO_AUTH=true`, and Trayarr logs a warning when it is off.
+  - **Forged requests are refused.** A browser sends Basic credentials with any request to the host, including a form another website submits. So any request that changes something must come from Trayarr's own pages: its `Origin` header must be this host, or `Sec-Fetch-Site` must be `same-origin`.
+  - **Headers:**
+    - a strict Content-Security-Policy: everything from `'self'`, nothing inline, no framing;
+    - `nosniff`;
+    - `Referrer-Policy: same-origin`.
+
+    Nothing in the pages is inline, so the policy blocks nothing Trayarr needs. Even the progress bar is a native `<progress>` element rather than a styled `div`.
+  - **Request bodies are capped at 64 KiB.** `/healthz` and `/readyz` are the only pages outside the login. `/readyz` says only which checks passed; the error details, which can include internal addresses and paths, are on the logged-in dashboard.
+  - **Failed logins are limited.** Each one is logged with the client's address. After 10 in a row from one address, that address is refused (HTTP 429) for 15 minutes, which turns thousands of guesses a second into 10 every quarter hour. Behind a reverse proxy every request comes from the proxy's address, so a lockout then blocks everyone using it for a while: the price of not trusting forwarded headers, which a client could fake.
 - **Least privilege:** non-root, only the drive's devices, and writes only to `/config` and the media path. Every file move is checked to stay inside the configured roots (path traversal guard).
 - **Secrets** stay out of logs, out of the UI after saving, and out of the repo.
 - **Supply chain:**
