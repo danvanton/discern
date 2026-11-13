@@ -22,3 +22,6 @@ Thumbs.db
 
 # Local demo folders (see the README)
 /dev/
+
+# Personal Claude Code notes, kept off GitHub
+CLAUDE.local.md
