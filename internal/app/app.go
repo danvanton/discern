@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NotNad/discern/internal/jobs"
-	"github.com/NotNad/discern/internal/radarr"
-	"github.com/NotNad/discern/internal/store"
+	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/radarr"
+	"github.com/danvanton/discern/internal/store"
 )
 
 // App runs jobs in the background and answers the web UI.

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NotNad/discern/internal/jobs"
-	"github.com/NotNad/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/makemkv"
 )
 
 func openTest(t *testing.T) (*Store, string) {

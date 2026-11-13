@@ -4,7 +4,7 @@
 
 services:
   discern:
-    image: ghcr.io/notnad/discern:0.1
+    image: ghcr.io/danvanton/discern:0.1
     restart: unless-stopped
 
     # Run as the user that owns your media folders (CHANGE), so Radarr can

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NotNad/discern/internal/identify"
-	"github.com/NotNad/discern/internal/jobs"
-	"github.com/NotNad/discern/internal/radarr"
+	"github.com/danvanton/discern/internal/identify"
+	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/radarr"
 )
 
 // RadarrConfig is how Discern uses one Radarr.

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NotNad/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/makemkv"
 )
 
 // Steps does the actual work of each state. The engine decides which step

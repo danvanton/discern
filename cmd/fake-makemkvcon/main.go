@@ -10,7 +10,7 @@ package main
 import (
 	"os"
 
-	"github.com/NotNad/discern/internal/makemkv/fake"
+	"github.com/danvanton/discern/internal/makemkv/fake"
 )
 
 func main() {

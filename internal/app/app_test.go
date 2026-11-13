@@ -16,14 +16,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NotNad/discern/internal/importer"
-	"github.com/NotNad/discern/internal/jobs"
-	"github.com/NotNad/discern/internal/makemkv"
-	"github.com/NotNad/discern/internal/makemkv/fake"
-	"github.com/NotNad/discern/internal/radarr"
-	"github.com/NotNad/discern/internal/radarr/radarrtest"
-	"github.com/NotNad/discern/internal/steps"
-	"github.com/NotNad/discern/internal/store"
+	"github.com/danvanton/discern/internal/importer"
+	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/makemkv/fake"
+	"github.com/danvanton/discern/internal/radarr"
+	"github.com/danvanton/discern/internal/radarr/radarrtest"
+	"github.com/danvanton/discern/internal/steps"
+	"github.com/danvanton/discern/internal/store"
 )
 
 func TestMain(m *testing.M) {

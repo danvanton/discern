@@ -1,4 +1,4 @@
-module github.com/NotNad/discern
+module github.com/danvanton/discern
 
 go 1.27.4
 

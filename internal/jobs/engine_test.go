@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NotNad/discern/internal/jobs"
-	"github.com/NotNad/discern/internal/makemkv"
-	"github.com/NotNad/discern/internal/store"
+	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/store"
 )
 
 var ctx = context.Background()

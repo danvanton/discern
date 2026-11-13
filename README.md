@@ -38,7 +38,7 @@ Open http://127.0.0.1:18790 and press **Scan disc**. The demo disc is identified
 
 ## Run it with Docker
 
-The image is `ghcr.io/notnad/discern`, for amd64 and arm64. [`deploy/compose.yaml`](deploy/compose.yaml) is a complete example, and [`deploy/README.md`](deploy/README.md) explains the drive passthrough, the folders and TrueNAS SCALE.
+The image is `ghcr.io/danvanton/discern`, for amd64 and arm64. [`deploy/compose.yaml`](deploy/compose.yaml) is a complete example, and [`deploy/README.md`](deploy/README.md) explains the drive passthrough, the folders and TrueNAS SCALE.
 
 At the first start, Discern downloads MakeMKV's `makemkvcon` from makemkv.com into `/config/makemkv`. It does this only if you set `MAKEMKV_ACCEPT_EULA=yes`, and it checks the download against a hash pinned in the release. The image holds only MakeMKV's open-source libraries.
 

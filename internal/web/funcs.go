@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NotNad/discern/internal/format"
-	"github.com/NotNad/discern/internal/jobs"
-	"github.com/NotNad/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/format"
+	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/makemkv"
 )
 
 // funcs are the helpers templates can call. Each one formats; none decides.

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NotNad/discern/internal/format"
+	"github.com/danvanton/discern/internal/format"
 )
 
 // Evidence is what the watchdog saves about a rip before stopping it: enough

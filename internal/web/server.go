@@ -23,8 +23,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NotNad/discern/internal/app"
-	"github.com/NotNad/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/app"
+	"github.com/danvanton/discern/internal/jobs"
 )
 
 //go:embed templates/*.html

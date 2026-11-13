@@ -3,9 +3,9 @@ package steps
 import (
 	"fmt"
 
-	"github.com/NotNad/discern/internal/format"
-	"github.com/NotNad/discern/internal/jobs"
-	"github.com/NotNad/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/format"
+	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/makemkv"
 )
 
 // Suggest picks the title most likely to be the movie, for the user to

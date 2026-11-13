@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/NotNad/discern/internal/importer"
-	"github.com/NotNad/discern/internal/jobs"
-	"github.com/NotNad/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/importer"
+	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/makemkv"
 )
 
 // Steps runs each job step against MakeMKV and Radarr.

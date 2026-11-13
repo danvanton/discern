@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NotNad/discern/internal/app"
-	"github.com/NotNad/discern/internal/jobs"
-	"github.com/NotNad/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/app"
+	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/makemkv"
 )
 
 // fakeBackend holds a few jobs and records what the UI asked it to do.

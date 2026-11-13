@@ -16,17 +16,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/NotNad/discern/internal/app"
-	"github.com/NotNad/discern/internal/config"
-	"github.com/NotNad/discern/internal/drive"
-	"github.com/NotNad/discern/internal/importer"
-	"github.com/NotNad/discern/internal/jobs"
-	"github.com/NotNad/discern/internal/makemkv"
-	"github.com/NotNad/discern/internal/makemkv/install"
-	"github.com/NotNad/discern/internal/radarr"
-	"github.com/NotNad/discern/internal/steps"
-	"github.com/NotNad/discern/internal/store"
-	"github.com/NotNad/discern/internal/web"
+	"github.com/danvanton/discern/internal/app"
+	"github.com/danvanton/discern/internal/config"
+	"github.com/danvanton/discern/internal/drive"
+	"github.com/danvanton/discern/internal/importer"
+	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/makemkv/install"
+	"github.com/danvanton/discern/internal/radarr"
+	"github.com/danvanton/discern/internal/steps"
+	"github.com/danvanton/discern/internal/store"
+	"github.com/danvanton/discern/internal/web"
 )
 
 // checkStagingFilesystem warns when staging and the library are on different

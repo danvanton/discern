@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NotNad/discern/internal/jobs"
-	"github.com/NotNad/discern/internal/makemkv"
-	"github.com/NotNad/discern/internal/makemkv/fake"
+	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/makemkv/fake"
 )
 
 // TestMain lets the test binary play makemkvcon (see internal/makemkv).

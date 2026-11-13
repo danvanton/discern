@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/NotNad/discern/internal/radarr/radarrtest"
+	"github.com/danvanton/discern/internal/radarr/radarrtest"
 )
 
 func main() {

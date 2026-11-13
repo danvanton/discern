@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NotNad/discern/internal/jobs"
-	"github.com/NotNad/discern/internal/makemkv"
-	"github.com/NotNad/discern/internal/radarr"
-	"github.com/NotNad/discern/internal/radarr/radarrtest"
+	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/radarr"
+	"github.com/danvanton/discern/internal/radarr/radarrtest"
 )
 
 var ctx = context.Background()

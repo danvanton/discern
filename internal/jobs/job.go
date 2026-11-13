@@ -3,7 +3,7 @@ package jobs
 import (
 	"time"
 
-	"github.com/NotNad/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/makemkv"
 )
 
 // Job is one disc's trip through Discern.
