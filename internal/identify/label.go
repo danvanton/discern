@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Label is a cleaned-up disc label.
@@ -57,7 +59,13 @@ var filler = map[string]bool{
 	"video": true, "rom": true, "ts": true, "logical": true, "volume": true, "id": true,
 	"disc": true, "disk": true, "movie": true, "feature": true, "main": true, "title": true,
 	"untitled": true, "no": true, "name": true, "label": true, "cdrom": true, "bdmv": true,
+	// Bonus discs' names: "Special Features", "Bonus Disc", "Extras".
+	"special": true, "features": true, "bonus": true, "extras": true, "extra": true, "material": true,
 }
+
+// maxTerm bounds a search term. Disc names are untrusted and can be long; no
+// film title comes near this, so a longer term is treated as saying nothing.
+const maxTerm = 100
 
 // articles don't count as a title on their own: "THE_FINAL_CUT" is a film
 // called The Final Cut, not "The" in its Final Cut.
@@ -116,10 +124,46 @@ func Parse(label string) Label {
 		words = append([]string{words[n-1]}, words[:n-1]...)
 	}
 	l.Term = strings.Join(words, " ")
+	if utf8.RuneCountInString(l.Term) > maxTerm {
+		l.Term = ""
+	}
 	if l.Term == "" {
 		l.Edition = ""
 	}
 	return l
+}
+
+// TitleFits reports whether a search result's title shares a meaningful word
+// with the term searched: a check that Radarr's top hit is plausibly the
+// disc's movie, not a fuzzy match. Short words and common ones don't count.
+func TitleFits(term, title string) bool {
+	have := map[string]bool{}
+	for _, w := range titleWords(term) {
+		have[w] = true
+	}
+	for _, w := range titleWords(title) {
+		if have[w] {
+			return true
+		}
+	}
+	return false
+}
+
+// common words say nothing about which film it is.
+var common = map[string]bool{"the": true, "and": true, "for": true, "with": true, "from": true, "part": true, "movie": true, "film": true}
+
+// titleWords lowercases s and splits it into words of letters and digits,
+// keeping those of three or more characters that aren't common.
+func titleWords(s string) []string {
+	var out []string
+	for _, w := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if utf8.RuneCountInString(w) >= 3 && !common[w] {
+			out = append(out, w)
+		}
+	}
+	return out
 }
 
 // hasTitleWord reports whether s has a word that can be a title: anything

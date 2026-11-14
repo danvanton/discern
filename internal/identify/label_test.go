@@ -1,6 +1,9 @@
 package identify
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParse(t *testing.T) {
 	cases := []struct {
@@ -44,6 +47,35 @@ func TestParse(t *testing.T) {
 	for _, c := range cases {
 		if got := Parse(c.in); got != c.want {
 			t.Errorf("Parse(%q)\n got  %+v\n want %+v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestParseSaysNothingForBonusNamesAndOverlongLabels(t *testing.T) {
+	for _, s := range []string{"Special Features", "BONUS_DISC", "Extras", strings.Repeat("Word ", 30)} {
+		if l := Parse(s); l.Term != "" {
+			t.Errorf("Parse(%.30q) = %q; want no search term", s, l.Term)
+		}
+	}
+	if l := Parse("Special Correspondents"); l.Term == "" {
+		t.Error("a title with one bonus-like word lost its term")
+	}
+}
+
+func TestTitleFits(t *testing.T) {
+	for _, c := range []struct {
+		term, title string
+		want        bool
+	}{
+		{"Star Trek II The Wrath of Khan", "Star Trek II: The Wrath of Khan", true},
+		{"Star Trek I The Motion Picture", "Star Trek: The Motion Picture", true},
+		{"The Whole Bloody Affair", "Kill Bill: The Whole Bloody Affair", true},
+		{"Tarantino Collection", "Parasite", false},
+		{"The Matrix", "The Movie", false},  // only common words in common
+		{"Star Trek II", "Rocky II", false}, // "ii" is too short to count
+	} {
+		if got := TitleFits(c.term, c.title); got != c.want {
+			t.Errorf("TitleFits(%q, %q) = %v; want %v", c.term, c.title, got, c.want)
 		}
 	}
 }

@@ -61,49 +61,76 @@ func NewRadarr(client *radarr.Client, cfg RadarrConfig) (*Radarr, error) {
 	return &Radarr{client: client, cfg: cfg}, nil
 }
 
-// Identify works out which movie the disc holds from its label, through
-// Radarr's TMDb lookup: the volume label first, then MakeMKV's disc name. It
-// returns nil, not an error, when the labels say nothing about the movie
-// (generic labels such as DVD_VIDEO) or nothing matches: the user then picks
-// the movie. A raw label is never searched, since a generic one would match
-// a random film. With a year in the label, the first result from that year
-// wins; otherwise the first result.
+// Identify works out which movie the disc holds, through Radarr's TMDb
+// lookup. It searches with MakeMKV's disc name first: that is the studio's
+// full title from the disc's metadata ("Star Trek II: The Wrath of Khan").
+// The volume label is often abbreviated (STAR_TREK_II_TWOK finds nothing) and
+// is searched only when the name finds no movie.
+//
+// A result counts only if its title shares a meaningful word with the term
+// searched (identify.TitleFits), so a fuzzy top hit doesn't become the movie.
+// A year in either label picks among results; otherwise the first that fits
+// wins.
+//
+// It returns nil, not an error, when the labels say nothing about the movie
+// (generic labels such as DVD_VIDEO, bonus names such as "Special Features")
+// or nothing fits: the user then picks the movie. A raw label is never
+// searched, since a generic one would match a random film. A failed search
+// doesn't stop the other term from being tried; its error is returned only if
+// nothing fits.
 func (r *Radarr) Identify(ctx context.Context, j *jobs.Job) (*jobs.Movie, error) {
 	if j.Disc == nil {
 		return nil, errors.New("no scan to identify the disc from")
 	}
-	var label identify.Label
-	for _, raw := range []string{j.Disc.Volume, j.Disc.Name} {
-		if label = identify.Parse(raw); label.Term != "" {
-			break
+	name, volume := identify.Parse(j.Disc.Name), identify.Parse(j.Disc.Volume)
+	year := name.Year
+	if year == 0 {
+		year = volume.Year
+	}
+	terms := []string{name.Term}
+	if volume.Term != name.Term {
+		terms = append(terms, volume.Term)
+	}
+	var failed error
+	for _, term := range terms {
+		if term == "" {
+			continue
+		}
+		results, err := r.client.Lookup(ctx, term)
+		if err != nil {
+			if failed == nil {
+				failed = err
+			}
+			continue
+		}
+		if m := pickMovie(results, term, year); m != nil {
+			return m, nil
 		}
 	}
-	term := label.Term
-	if term == "" {
-		return nil, nil
-	}
-	results, err := r.client.Lookup(ctx, term)
-	if err != nil {
-		return nil, err
-	}
+	return nil, failed
+}
+
+// pickMovie takes the first result with a TMDb id whose title fits term, or
+// the first such result from year when there is one.
+func pickMovie(results []radarr.Movie, term string, year int) *jobs.Movie {
 	pick := -1
 	for i, m := range results {
-		if m.TMDbID == 0 {
+		if m.TMDbID == 0 || !identify.TitleFits(term, m.Title) {
 			continue
 		}
 		if pick < 0 {
 			pick = i
 		}
-		if label.Year != 0 && m.Year == label.Year {
+		if year != 0 && m.Year == year {
 			pick = i
 			break
 		}
 	}
 	if pick < 0 {
-		return nil, nil
+		return nil
 	}
 	m := results[pick]
-	return &jobs.Movie{TMDbID: m.TMDbID, Title: m.Title, Year: m.Year}, nil
+	return &jobs.Movie{TMDbID: m.TMDbID, Title: m.Title, Year: m.Year}
 }
 
 // Import hands the rip in dir to Radarr and checks that Radarr filed it.

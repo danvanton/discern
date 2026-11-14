@@ -399,3 +399,115 @@ func TestRetryAfterAWronglyFiledImportChecksAgain(t *testing.T) {
 		t.Errorf("sent %d imports, want 1: a retry must not import again", n)
 	}
 }
+
+// TestIdentifyTriesTheDiscNameFirst uses two real discs from the first
+// homelab runs. Their volume labels are abbreviated and find nothing in
+// Radarr; their disc names find the movie with one search.
+func TestIdentifyTriesTheDiscNameFirst(t *testing.T) {
+	for _, d := range []struct {
+		volume, name, term string
+		tmdb               int
+		title              string
+		year               int
+	}{
+		{"STAR_TREK_I_TMP", "Star Trek I: The Motion Picture", "Star Trek I The Motion Picture", 152, "Star Trek: The Motion Picture", 1979},
+		{"STAR_TREK_II_TWOK", "Star Trek II: The Wrath of Khan", "Star Trek II The Wrath of Khan", 154, "Star Trek II: The Wrath of Khan", 1982},
+	} {
+		s := newSetup(t)
+		s.fake.SetLookup() // every other term finds nothing, as "Star Trek Ii Twok" did
+		s.fake.SetLookupFor(d.term, map[string]any{"tmdbId": d.tmdb, "title": d.title, "year": d.year})
+		s.job.Disc.Volume, s.job.Disc.Name = d.volume, d.name
+		m, err := s.imp.Identify(ctx, s.job)
+		if err != nil || m == nil || m.TMDbID != d.tmdb {
+			t.Errorf("%s: identified %+v, %v; want TMDb %d", d.volume, m, err, d.tmdb)
+		}
+		if terms := s.fake.LookupTerms(); len(terms) != 1 || terms[0] != d.term {
+			t.Errorf("%s: searched %q; want only the disc name, %q", d.volume, terms, d.term)
+		}
+	}
+}
+
+func TestIdentifyFallsBackToTheVolumeLabel(t *testing.T) {
+	s := newSetup(t)
+	s.fake.SetLookup()
+	s.fake.SetLookupFor("The Whole Bloody Affair",
+		map[string]any{"tmdbId": 414419, "title": "Kill Bill: The Whole Bloody Affair", "year": 2011})
+	s.job.Disc.Volume, s.job.Disc.Name = "THE_WHOLE_BLOODY_AFFAIR_UHD_D2", "Tarantino Collection"
+	m, err := s.imp.Identify(ctx, s.job)
+	if err != nil || m == nil || m.TMDbID != 414419 {
+		t.Fatalf("identified %+v, %v; want TMDb 414419 from the volume label", m, err)
+	}
+	if terms := s.fake.LookupTerms(); len(terms) != 2 || terms[0] != "Tarantino Collection" {
+		t.Errorf("searched %q; want the disc name, then the volume label", terms)
+	}
+
+	// A name and label that clean to the same term are searched once.
+	s = newSetup(t)
+	s.fake.SetLookup()
+	s.job.Disc.Volume, s.job.Disc.Name = "THE_MATRIX", "The Matrix"
+	if m, err := s.imp.Identify(ctx, s.job); err != nil || m != nil {
+		t.Errorf("no results: got %+v, %v; want nil, nil", m, err)
+	}
+	if n := len(s.fake.LookupTerms()); n != 1 {
+		t.Errorf("searched %d times for one term; want 1", n)
+	}
+}
+
+// The year can come from either label: here only the volume label has it.
+func TestIdentifyUsesEitherLabelsYear(t *testing.T) {
+	s := newSetup(t)
+	s.fake.SetLookup(
+		map[string]any{"tmdbId": 1, "title": "Spider-Man 3", "year": 2017},
+		map[string]any{"tmdbId": 559, "title": "Spider-Man 3", "year": 2007},
+	)
+	s.job.Disc.Volume, s.job.Disc.Name = "Spider-Man 3 (2007)", "Spider-Man 3"
+	if m, err := s.imp.Identify(ctx, s.job); err != nil || m == nil || m.TMDbID != 559 {
+		t.Errorf("identified %+v, %v; want the 2007 film (559)", m, err)
+	}
+}
+
+// A result whose title doesn't fit the term is not the movie, and a bonus
+// disc's name is never searched.
+func TestIdentifySkipsResultsThatDontFit(t *testing.T) {
+	s := newSetup(t)
+	s.fake.SetLookup()
+	s.fake.SetLookupFor("Tarantino Collection", map[string]any{"tmdbId": 496243, "title": "Parasite", "year": 2019})
+	s.fake.SetLookupFor("The Whole Bloody Affair",
+		map[string]any{"tmdbId": 414419, "title": "Kill Bill: The Whole Bloody Affair", "year": 2011})
+	s.job.Disc.Volume, s.job.Disc.Name = "THE_WHOLE_BLOODY_AFFAIR_UHD_D2", "Tarantino Collection"
+	if m, err := s.imp.Identify(ctx, s.job); err != nil || m == nil || m.TMDbID != 414419 {
+		t.Errorf("identified %+v, %v; want Kill Bill (414419), not the unfitting first hit", m, err)
+	}
+
+	s = newSetup(t)
+	s.fake.SetLookup(map[string]any{"tmdbId": 603, "title": "The Matrix", "year": 1999})
+	s.job.Disc.Volume, s.job.Disc.Name = "THE_MATRIX", "Special Features"
+	if m, err := s.imp.Identify(ctx, s.job); err != nil || m == nil || m.TMDbID != 603 {
+		t.Errorf("identified %+v, %v; want The Matrix from the volume label", m, err)
+	}
+	if terms := s.fake.LookupTerms(); len(terms) != 1 || terms[0] != "The Matrix" {
+		t.Errorf("searched %q; a bonus disc's name must not be searched", terms)
+	}
+}
+
+// A failed search for the name doesn't stop the volume label being tried;
+// the error is returned only when nothing fits.
+func TestIdentifyTriesTheLabelWhenTheNameSearchFails(t *testing.T) {
+	s := newSetup(t)
+	s.fake.SetLookup()
+	s.fake.FailLookup("Star Trek II The Wrath of Khan")
+	s.fake.SetLookupFor("Star Trek Ii Twok",
+		map[string]any{"tmdbId": 154, "title": "Star Trek II: The Wrath of Khan", "year": 1982})
+	s.job.Disc.Volume, s.job.Disc.Name = "STAR_TREK_II_TWOK", "Star Trek II: The Wrath of Khan"
+	if m, err := s.imp.Identify(ctx, s.job); err != nil || m == nil || m.TMDbID != 154 {
+		t.Errorf("identified %+v, %v; want 154 from the volume label", m, err)
+	}
+
+	s = newSetup(t)
+	s.fake.SetLookup()
+	s.fake.FailLookup("Star Trek II The Wrath of Khan")
+	s.job.Disc.Volume, s.job.Disc.Name = "STAR_TREK_II_TWOK", "Star Trek II: The Wrath of Khan"
+	if m, err := s.imp.Identify(ctx, s.job); err == nil || m != nil {
+		t.Errorf("got %+v, %v; want the failed search's error when nothing fits", m, err)
+	}
+}

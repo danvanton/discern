@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,18 +28,21 @@ type Server struct {
 	Remote  string // the same folder as Radarr sees it
 	Library string // where imported files go
 
-	mu       sync.Mutex
-	b        Behaviour
-	movies   []map[string]any
-	nextID   int
-	lookup   []map[string]any
-	commands map[int]*command
-	added    []map[string]any
-	imports  []map[string]any
-	badKeys  int
-	lookups  int
-	errs     []error
-	handler  http.Handler
+	mu         sync.Mutex
+	b          Behaviour
+	movies     []map[string]any
+	nextID     int
+	lookup     []map[string]any
+	lookupFor  map[string][]map[string]any // per-term results, from SetLookupFor
+	terms      []string                    // every search term, in order
+	lookupFail map[string]bool             // terms whose search fails, from FailLookup
+	commands   map[int]*command
+	added      []map[string]any
+	imports    []map[string]any
+	badKeys    int
+	lookups    int
+	errs       []error
+	handler    http.Handler
 }
 
 // Behaviour switches the fake into a failure mode.
@@ -123,6 +127,38 @@ func (s *Server) SetLookup(results ...map[string]any) {
 	s.lookup = results
 }
 
+// SetLookupFor sets the results of a movie search for one term only, as
+// Radarr's answers depend on the term. Other terms get SetLookup's results.
+func (s *Server) SetLookupFor(term string, results ...map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lookupFor == nil {
+		s.lookupFor = map[string][]map[string]any{}
+	}
+	if results == nil {
+		results = []map[string]any{}
+	}
+	s.lookupFor[term] = results
+}
+
+// FailLookup makes the movie search for term fail, as Radarr does when TMDb
+// doesn't answer.
+func (s *Server) FailLookup(term string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lookupFail == nil {
+		s.lookupFail = map[string]bool{}
+	}
+	s.lookupFail[term] = true
+}
+
+// LookupTerms returns the movie searches made, in order.
+func (s *Server) LookupTerms() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.terms)
+}
+
 // AddLibraryMovie puts a movie in the library, with a file the user had long
 // before (dateAdded 2020) if hasFile.
 func (s *Server) AddLibraryMovie(tmdbID int, title string, year int, hasFile bool) {
@@ -177,10 +213,18 @@ func (s *Server) RunningImport(remotePath string, movieID int) {
 }
 
 // Added returns the bodies of POST /movie, in order.
-func (s *Server) Added() []map[string]any { s.mu.Lock(); defer s.mu.Unlock(); return s.added }
+func (s *Server) Added() []map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.added)
+}
 
 // Imports returns the bodies of POST /command, in order.
-func (s *Server) Imports() []map[string]any { s.mu.Lock(); defer s.mu.Unlock(); return s.imports }
+func (s *Server) Imports() []map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.imports)
+}
 
 // BadKeys counts requests without the right API key header.
 func (s *Server) BadKeys() int { s.mu.Lock(); defer s.mu.Unlock(); return s.badKeys }
@@ -239,10 +283,20 @@ func (s *Server) addMovie(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, m)
 }
 
-func (s *Server) doLookup(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) doLookup(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lookups++
+	term := r.URL.Query().Get("term")
+	s.terms = append(s.terms, term)
+	if s.lookupFail[term] {
+		http.Error(w, "lookup failed", http.StatusServiceUnavailable)
+		return
+	}
+	if results, ok := s.lookupFor[term]; ok {
+		writeJSON(w, results)
+		return
+	}
 	writeJSON(w, s.lookup)
 }
 
