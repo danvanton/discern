@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -26,6 +27,34 @@ func WriteKey(path, key string) (changed bool, err error) {
 	if err := checkKey(key); err != nil {
 		return false, err
 	}
+	return writeSetting(path, "app_Key", key)
+}
+
+// WriteSetting sets one of MakeMKV's settings, such as
+// app_DefaultSelectionString, keeping the others, and reports whether the
+// file changed. An empty value removes the setting, so MakeMKV's own default
+// applies. The value goes inside quotes, so quotes, backslashes and control
+// characters are refused.
+func WriteSetting(path, name, value string) (changed bool, err error) {
+	if !settingName.MatchString(name) {
+		return false, fmt.Errorf("%q is not a MakeMKV setting name", name)
+	}
+	if len(value) > 4096 {
+		return false, fmt.Errorf("%s: value longer than 4096 bytes", name)
+	}
+	for _, c := range value {
+		if c < ' ' || c > '~' || c == '"' || c == '\\' {
+			return false, fmt.Errorf("%s: only printable ASCII without quotes or backslashes", name)
+		}
+	}
+	return writeSetting(path, name, value)
+}
+
+var settingName = regexp.MustCompile(`^app_[A-Za-z]+$`)
+
+// writeSetting replaces or adds the line for name ("" removes it) and writes
+// the file only if it changed.
+func writeSetting(path, name, value string) (changed bool, err error) {
 	old, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return false, err
@@ -34,24 +63,27 @@ func WriteKey(path, key string) (changed bool, err error) {
 		return false, fmt.Errorf("%s is larger than %d bytes", path, maxSettings)
 	}
 
-	want := `app_Key = "` + key + `"`
+	want := name + ` = "` + value + `"`
 	var lines []string
 	found := false
 	if len(old) > 0 {
 		for _, line := range strings.Split(strings.TrimRight(string(old), "\n"), "\n") {
-			if isKeyLine(line) {
-				if found {
-					continue // keep just one app_Key
+			if isSettingLine(line, name) {
+				if found || value == "" {
+					continue // keep just one line for name, or none to remove it
 				}
 				line, found = want, true
 			}
 			lines = append(lines, line)
 		}
 	}
-	if !found {
+	if !found && value != "" {
 		lines = append(lines, want)
 	}
-	next := strings.Join(lines, "\n") + "\n"
+	next := ""
+	if len(lines) > 0 {
+		next = strings.Join(lines, "\n") + "\n"
+	}
 	if next == string(old) {
 		return false, nil
 	}
@@ -78,9 +110,10 @@ func WriteKey(path, key string) (changed bool, err error) {
 	return true, os.Rename(tmp.Name(), path)
 }
 
-// isKeyLine matches MakeMKV's "app_Key = ..." line, not app_KeyHash.
-func isKeyLine(line string) bool {
-	rest, ok := strings.CutPrefix(strings.TrimSpace(line), "app_Key")
+// isSettingLine matches MakeMKV's "name = ..." line: "app_Key = ...", not
+// app_KeyHash.
+func isSettingLine(line, name string) bool {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(line), name)
 	return ok && strings.HasPrefix(strings.TrimSpace(rest), "=")
 }
 

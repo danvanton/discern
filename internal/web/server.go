@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/danvanton/discern/internal/app"
 	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/settings"
 )
 
 //go:embed templates/*.html
@@ -48,6 +50,8 @@ type Backend interface {
 	Cancel(ctx context.Context, id int64) error
 	LookupMovie(ctx context.Context, tmdbID int) (*jobs.Movie, error)
 	Health(ctx context.Context) []app.Check
+	Settings(ctx context.Context) (settings.Settings, error)
+	SaveSettings(ctx context.Context, st settings.Settings) error
 }
 
 // Options configures the server.
@@ -75,7 +79,7 @@ func New(b Backend, opt Options) (http.Handler, error) {
 		opt.Log = slog.Default()
 	}
 	s := &server{b: b, opt: opt, pages: map[string]*template.Template{}, log: opt.Log, guards: newLoginGuard()}
-	for _, page := range []string{"dashboard.html", "job.html"} {
+	for _, page := range []string{"dashboard.html", "job.html", "settings.html"} {
 		t, err := template.New("").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/fragments.html", "templates/"+page)
 		if err != nil {
 			return nil, err
@@ -97,6 +101,8 @@ func New(b Backend, opt Options) (http.Handler, error) {
 	mux.HandleFunc("POST /jobs/{id}/retry", s.action(b.Retry))
 	mux.HandleFunc("POST /jobs/{id}/cancel", s.action(b.Cancel))
 	mux.HandleFunc("POST /drives/scan", s.scanDrive)
+	mux.HandleFunc("GET /settings", s.settingsPage)
+	mux.HandleFunc("POST /settings", s.saveSettings)
 	mux.HandleFunc("GET /api/v1/jobs", s.apiJobs)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 
@@ -523,4 +529,101 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+// The Settings page (decisions D21, D24, D25).
+
+type settingsData struct {
+	Version    string
+	Settings   settings.Settings
+	Choices    []settings.Choice
+	Audio      []string // ticked boxes, most preferred first
+	FirstAudio string   // the preferred audio language
+	Subtitles  []string
+	ForcedOnly bool
+	Commentary bool
+	Saved      bool
+	Ignored    bool // saved, but ticked languages weren't: MakeMKV's default is on
+	Error      string
+}
+
+func (s *server) settingsPage(w http.ResponseWriter, r *http.Request) {
+	st, err := s.b.Settings(r.Context())
+	if err != nil {
+		// Still show the page, with the defaults: saving it replaces the
+		// values that can't be read, so the user can repair them here.
+		s.log.Error("reading the settings", "err", err)
+		s.showSettings(w, http.StatusOK, settingsData{Settings: settings.Defaults(),
+			Error: fmt.Sprintf("The saved settings can't be read (%v). Saving this page replaces them.", err)}, nil)
+		return
+	}
+	saved := r.URL.Query().Get("saved")
+	s.showSettings(w, http.StatusOK, settingsData{Settings: st, Saved: saved != "", Ignored: saved == "ignored"}, nil)
+}
+
+func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.showSettings(w, http.StatusBadRequest, settingsData{Settings: settings.Defaults(), Error: err.Error()}, nil)
+		return
+	}
+	f := r.PostForm
+	// The preferred language goes first, and counts as ticked; the others
+	// follow in the page's order. The order is the tracks' order in the file.
+	audio := inChoiceOrder(f["audio"])
+	if first := f.Get("first_audio"); first != "" {
+		audio = append([]string{first}, slices.DeleteFunc(audio, func(c string) bool { return c == first })...)
+	}
+	langs := &settings.Languages{
+		Audio:      audio,
+		Subtitles:  inChoiceOrder(f["subtitles"]),
+		ForcedOnly: f.Get("forced_only") == "on",
+		Commentary: f.Get("commentary") == "on",
+	}
+	st := settings.Settings{Eject: f.Get("eject") == "on"}
+	if f.Get("languages") == "chosen" {
+		st.Languages = langs
+	}
+	if err := s.b.SaveSettings(r.Context(), st); err != nil {
+		s.showSettings(w, http.StatusUnprocessableEntity, settingsData{Settings: st, Error: err.Error()}, langs)
+		return
+	}
+	saved := "1"
+	if st.Languages == nil && len(audio)+len(langs.Subtitles) > 0 {
+		saved = "ignored" // say so, rather than drop the ticked languages silently
+	}
+	http.Redirect(w, r, "/settings?saved="+saved, http.StatusSeeOther)
+}
+
+// showSettings renders the page. form, if set, is what was submitted, so a
+// rejected form keeps its boxes; otherwise the saved languages are shown.
+func (s *server) showSettings(w http.ResponseWriter, status int, d settingsData, form *settings.Languages) {
+	d.Version, d.Choices = s.opt.Version, settings.Choices
+	l := form
+	if l == nil {
+		l = d.Settings.Languages
+	}
+	if l != nil {
+		d.Audio, d.Subtitles, d.ForcedOnly, d.Commentary = l.Audio, l.Subtitles, l.ForcedOnly, l.Commentary
+		if len(l.Audio) > 0 {
+			d.FirstAudio = l.Audio[0]
+		}
+	}
+	s.render(w, status, "settings.html", "layout", d)
+}
+
+// inChoiceOrder sorts submitted codes into the page's order. Codes the page
+// doesn't offer go last, for Validate to reject.
+func inChoiceOrder(codes []string) []string {
+	var out []string
+	for _, c := range settings.Choices {
+		if slices.Contains(codes, c.Code) {
+			out = append(out, c.Code)
+		}
+	}
+	for _, c := range codes {
+		if !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	return out
 }

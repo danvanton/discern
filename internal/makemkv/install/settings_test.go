@@ -62,3 +62,43 @@ func TestWriteKeyRejectsUnsafeKeys(t *testing.T) {
 		t.Error("a rejected key still wrote the settings file")
 	}
 }
+
+func TestWriteSettingSetsAndRemoves(t *testing.T) {
+	path := SettingsPath(t.TempDir())
+	if _, err := WriteKey(path, testKey); err != nil {
+		t.Fatal(err)
+	}
+	rule := "-sel:all,+sel:video,+sel:(audio&(eng|nolang|single)),=100:all"
+	if changed, err := WriteSetting(path, "app_DefaultSelectionString", rule); err != nil || !changed {
+		t.Fatalf("WriteSetting = %v, %v; want true, nil", changed, err)
+	}
+	want := `app_Key = "` + testKey + `"` + "\n" + `app_DefaultSelectionString = "` + rule + `"` + "\n"
+	if got := read(t, path); got != want {
+		t.Errorf("settings.conf =\n%s\nwant\n%s", got, want)
+	}
+	if changed, _ := WriteSetting(path, "app_DefaultSelectionString", rule); changed {
+		t.Error("the same rule again rewrote the file")
+	}
+	// An empty value removes the line, so MakeMKV's default applies again.
+	if changed, err := WriteSetting(path, "app_DefaultSelectionString", ""); err != nil || !changed {
+		t.Fatalf("removing: %v, %v", changed, err)
+	}
+	if got := read(t, path); got != `app_Key = "`+testKey+`"`+"\n" {
+		t.Errorf("after removing, settings.conf = %q", got)
+	}
+}
+
+func TestWriteSettingRefusesUnsafeInput(t *testing.T) {
+	path := SettingsPath(t.TempDir())
+	for _, c := range []struct{ name, value string }{
+		{"app_DefaultSelectionString", `x"y`},
+		{"app_DefaultSelectionString", "x\ny"},
+		{"app_DefaultSelectionString", `x\y`},
+		{"not_a_setting", "x"},
+		{"app_Key = \"evil\"\napp_X", "x"},
+	} {
+		if _, err := WriteSetting(path, c.name, c.value); err == nil {
+			t.Errorf("WriteSetting(%q, %q) was accepted", c.name, c.value)
+		}
+	}
+}

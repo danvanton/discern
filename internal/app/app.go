@@ -15,6 +15,7 @@ import (
 
 	"github.com/danvanton/discern/internal/jobs"
 	"github.com/danvanton/discern/internal/radarr"
+	"github.com/danvanton/discern/internal/settings"
 	"github.com/danvanton/discern/internal/store"
 )
 
@@ -29,8 +30,12 @@ type App struct {
 	Drives []string
 	// MakeMKVCon is the makemkvcon path, checked by Health.
 	MakeMKVCon string
-	// Eject, if set, is called with the drive when a job finishes.
+	// Eject, if set, is called with the drive when a job finishes and the
+	// Settings page has eject on (decision D25).
 	Eject func(device string) error
+	// MakeMKVSettings is MakeMKV's settings.conf, where the language choice
+	// goes before each rip; empty to leave it alone (development).
+	MakeMKVSettings string
 
 	base context.Context // runs end when this does (shutdown)
 	wg   sync.WaitGroup
@@ -70,8 +75,18 @@ func (a *App) start(id int64) {
 			return
 		}
 		if j.State == jobs.Done && a.Eject != nil {
-			if err := a.Eject(j.Drive); err != nil {
-				a.log.Warn("eject failed", "drive", j.Drive, "err", err)
+			st, err := a.store.Settings(context.WithoutCancel(a.base))
+			switch {
+			case err != nil:
+				a.log.Warn("not ejecting: the settings can't be read", "drive", j.Drive, "err", err)
+			case !st.Eject:
+				// Off on the Settings page: the tray stays shut.
+			default:
+				if err := a.Eject(j.Drive); err != nil {
+					a.log.Warn("eject failed", "drive", j.Drive, "err", err)
+				} else {
+					a.log.Info("disc ejected", "drive", j.Drive)
+				}
 			}
 		}
 	}()
@@ -248,4 +263,18 @@ func (a *App) knows(drive string) bool {
 		}
 	}
 	return false
+}
+
+// Settings returns the Settings page's values.
+func (a *App) Settings(ctx context.Context) (settings.Settings, error) { return a.store.Settings(ctx) }
+
+// SaveSettings checks and saves the Settings page. The language choice
+// reaches MakeMKV at the next rip.
+func (a *App) SaveSettings(ctx context.Context, st settings.Settings) error {
+	if st.Languages != nil {
+		if err := st.Languages.Validate(); err != nil {
+			return err
+		}
+	}
+	return a.store.SaveSettings(ctx, st)
 }

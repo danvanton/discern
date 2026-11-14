@@ -1,0 +1,52 @@
+{{define "title"}}Settings · Discern{{end}}
+
+{{define "content"}}
+<p><a href="/">← All jobs</a></p>
+<h1>Settings</h1>
+{{if .Error}}<p class="alert" role="alert">{{.Error}}</p>{{end}}
+{{if .Ignored}}<p class="saved" role="status">Saved. MakeMKV's default selection is on, so the ticked languages were not saved. Choose "Only the languages chosen below" to use them.</p>
+{{else if .Saved}}<p class="saved" role="status">Saved. Language changes apply from the next rip.</p>{{end}}
+
+<form method="post" action="/settings" class="panel settings">
+  <h2>When a disc is done</h2>
+  <p><label><input type="checkbox" name="eject" value="on" {{if .Settings.Eject}}checked{{end}}> Open the tray</label></p>
+
+  <h2>Tracks to keep</h2>
+  <fieldset>
+    <legend>Languages</legend>
+    <p><label><input type="radio" name="languages" value="default" {{if not .Settings.Languages}}checked{{end}}> MakeMKV's default selection</label></p>
+    <p><label><input type="radio" name="languages" value="chosen" {{if .Settings.Languages}}checked{{end}}> Only the languages chosen below</label></p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Audio</legend>
+    <div class="langs">
+      {{range .Choices}}<label><input type="checkbox" name="audio" value="{{.Code}}" {{if has $.Audio .Code}}checked{{end}}> {{.Name}}</label>
+      {{end}}
+    </div>
+    <p>
+      <label for="first-audio">Preferred audio language</label>
+      <select id="first-audio" name="first_audio">
+        <option value="">The first one ticked above</option>
+        {{range .Choices}}<option value="{{.Code}}" {{if eq $.FirstAudio .Code}}selected{{end}}>{{.Name}}</option>
+        {{end}}
+      </select>
+    </p>
+    <p class="muted small">The preferred language's track comes first in the file, so players start with it. Audio with no language, and a title's only audio track, are always kept; a title with no audio in these languages keeps its own.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Subtitles</legend>
+    <div class="langs">
+      {{range .Choices}}<label><input type="checkbox" name="subtitles" value="{{.Code}}" {{if has $.Subtitles .Code}}checked{{end}}> {{.Name}}</label>
+      {{end}}
+    </div>
+    <p><label><input type="checkbox" name="forced_only" value="on" {{if .ForcedOnly}}checked{{end}}> Forced subtitles only</label></p>
+    <p class="muted small">Choose no language to keep no subtitles.</p>
+  </fieldset>
+
+  <p><label><input type="checkbox" name="commentary" value="on" {{if .Commentary}}checked{{end}}> Keep commentary tracks</label></p>
+
+  <button type="submit" class="primary">Save</button>
+</form>
+{{end}}

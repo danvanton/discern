@@ -17,20 +17,42 @@ import (
 // rip that stopped early lands far under: the Kill Bill stall was 640 MiB of
 // 73 GB, under 1%. The bounds are deliberately wide until real rips have
 // been measured; see the open questions in docs/DESIGN.md.
+//
+// When only chosen languages are kept, the file is smaller by the tracks left
+// out, which the scan's size still counts: several lossless audio tracks can
+// be half a Blu-ray title. The floor is then much lower, and the track check
+// below is what catches a file without sound.
 const (
-	minSizeRatio = 0.70
-	maxSizeRatio = 1.10
+	minSizeRatio        = 0.70
+	minTrimmedSizeRatio = 0.30
+	maxSizeRatio        = 1.10
 )
 
 // Verify checks the rip before anything is imported: one file per chosen
-// title, each a plausible size for that title. It reads only, so it is safe
-// to run again.
-func (s *Steps) Verify(_ context.Context, j *jobs.Job, dir string) error {
-	return VerifyDir(j, dir)
+// title, each a plausible size for that title, and, where mkvmerge is
+// available (Steps.Tracks), a Matroska file with video and with audio if the
+// title has any. It reads only, so it is safe to run again.
+func (s *Steps) Verify(ctx context.Context, j *jobs.Job, dir string) error {
+	floor := minSizeRatio
+	if s.Trimmed != nil {
+		trimmed, err := s.Trimmed(ctx)
+		if err != nil {
+			return fmt.Errorf("reading the language settings: %w", err)
+		}
+		if trimmed {
+			floor = minTrimmedSizeRatio
+		}
+	}
+	return verifyDir(ctx, j, dir, floor, s.Tracks)
 }
 
-// VerifyDir is Verify without the receiver, for tests.
+// VerifyDir is Verify with the default size floor and no track check, for
+// tests.
 func VerifyDir(j *jobs.Job, dir string) error {
+	return verifyDir(context.Background(), j, dir, minSizeRatio, nil)
+}
+
+func verifyDir(ctx context.Context, j *jobs.Job, dir string, floor float64, tracks func(context.Context, string) (FileTracks, error)) error {
 	if j.Disc == nil {
 		return fmt.Errorf("no scan to verify against")
 	}
@@ -59,13 +81,36 @@ func VerifyDir(j *jobs.Job, dir string) error {
 		}
 		if t.SizeBytes > 0 {
 			ratio := float64(info.Size()) / float64(t.SizeBytes)
-			if ratio < minSizeRatio || ratio > maxSizeRatio {
+			if ratio < floor || ratio > maxSizeRatio {
 				return fmt.Errorf("%s is %.0f%% of the size the scan gave title %d (%d of %d bytes); a complete rip is %.0f-%.0f%%",
-					filepath.Base(path), ratio*100, idx, info.Size(), t.SizeBytes, minSizeRatio*100, maxSizeRatio*100)
+					filepath.Base(path), ratio*100, idx, info.Size(), t.SizeBytes, floor*100, maxSizeRatio*100)
 			}
+		}
+		if tracks == nil {
+			continue
+		}
+		got, err := tracks(ctx, path)
+		if err != nil {
+			return fmt.Errorf("%s: %w", filepath.Base(path), err)
+		}
+		if got.Video == 0 {
+			return fmt.Errorf("%s has no video track", filepath.Base(path))
+		}
+		if got.Audio == 0 && hasAudio(t) {
+			return fmt.Errorf("%s has no audio track, though title %d has audio on the disc: check the languages in Settings",
+				filepath.Base(path), idx)
 		}
 	}
 	return nil
+}
+
+func hasAudio(t makemkv.Title) bool {
+	for _, s := range t.Streams {
+		if s.Type == "Audio" {
+			return true
+		}
+	}
+	return false
 }
 
 func title(d *makemkv.Disc, idx int) (makemkv.Title, bool) {

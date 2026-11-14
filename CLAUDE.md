@@ -24,6 +24,7 @@ The design, every decision (D1–D13) and the reason for each are in `docs/DESIG
 | `internal/config` | settings from `DISCERN_*` environment variables |
 | `internal/web` | server-rendered UI (`html/template` + vendored htmx), Basic auth, health endpoints |
 | `internal/format` | shared size and length formatting |
+| `internal/settings` | the Settings page's values (eject, languages); stored by `internal/store` |
 | `testdata/makemkv` | robot-output scans used by tests and the demo |
 | `Dockerfile`, `deploy/` | the image, and the compose example with its notes |
 | `scripts/update-makemkv-pin.sh` | pins a MakeMKV release after checking its signature; the weekly workflow runs it |

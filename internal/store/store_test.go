@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -44,8 +45,9 @@ func TestMigrationsAreAppliedOnceAndSurviveReopening(t *testing.T) {
 	}
 	var version int
 	s2.db.QueryRow("PRAGMA user_version").Scan(&version)
-	if version != 1 {
-		t.Errorf("user_version = %d, want 1", version)
+	files, _ := fs.Glob(migrations, "migrations/*.sql")
+	if version != len(files) {
+		t.Errorf("user_version = %d, want %d (one per migration file)", version, len(files))
 	}
 }
 

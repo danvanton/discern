@@ -51,7 +51,7 @@ func TestDefaults(t *testing.T) {
 	if c.Listen != ":8790" || c.DataDir != abs(t, "/config") || c.StagingDir != abs(t, "/media/staging") ||
 		c.MakeMKVCon != "" || c.MakeMKVDir != abs(t, "/config/makemkv") || c.AcceptEULA || c.MakeMKVKey != "" ||
 		len(c.Drives) != 1 || c.Drives[0] != "/dev/sr0" ||
-		c.DrivePoll != 2*time.Second || !c.Eject || c.RadarrQualityProfile != "Any" {
+		c.DrivePoll != 2*time.Second || c.RadarrQualityProfile != "Any" {
 		t.Errorf("defaults = %+v", c)
 	}
 	if c.RadarrStagingDir != filepath.ToSlash(abs(t, "/media/staging")) {
@@ -63,13 +63,12 @@ func TestSettings(t *testing.T) {
 	c, err := Load(env(with(map[string]string{
 		"DISCERN_DRIVES":             " /dev/sr0, /dev/sr1 ,",
 		"DISCERN_DRIVE_POLL":         "5s",
-		"DISCERN_EJECT":              "false",
 		"DISCERN_RADARR_STAGING_DIR": "/data/staging",
 	})), files(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(c.Drives, "|") != "/dev/sr0|/dev/sr1" || c.DrivePoll != 5*time.Second || c.Eject ||
+	if strings.Join(c.Drives, "|") != "/dev/sr0|/dev/sr1" || c.DrivePoll != 5*time.Second ||
 		c.RadarrStagingDir != "/data/staging" {
 		t.Errorf("got %+v", c)
 	}
@@ -96,10 +95,10 @@ func TestSecretsFromFiles(t *testing.T) {
 // Every problem is reported at once.
 func TestProblemsAreAllReported(t *testing.T) {
 	_, err := Load(env(map[string]string{
-		"DISCERN_DRIVE_POLL":    "fast",
-		"DISCERN_EJECT":         "maybe",
-		"DISCERN_PASSWORD":      "short",
-		"DISCERN_PASSWORD_FILE": "/x",
+		"DISCERN_DRIVE_POLL":       "fast",
+		"DISCERN_INSECURE_NO_AUTH": "maybe",
+		"DISCERN_PASSWORD":         "short",
+		"DISCERN_PASSWORD_FILE":    "/x",
 	}), files(nil))
 	if err == nil {
 		t.Fatal("loaded a config with nothing set")

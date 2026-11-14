@@ -17,17 +17,20 @@ import (
 	"github.com/danvanton/discern/internal/app"
 	"github.com/danvanton/discern/internal/jobs"
 	"github.com/danvanton/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/settings"
 )
 
 // fakeBackend holds a few jobs and records what the UI asked it to do.
 type fakeBackend struct {
-	jobs     map[int64]*jobs.Job
-	approved []int
-	movie    *jobs.Movie
-	retried  int64
-	scanned  string
-	health   []app.Check
-	failNext error
+	jobs        map[int64]*jobs.Job
+	approved    []int
+	movie       *jobs.Movie
+	retried     int64
+	scanned     string
+	health      []app.Check
+	failNext    error
+	settings    *settings.Settings
+	settingsErr error
 }
 
 func newBackend() *fakeBackend {
@@ -89,6 +92,26 @@ func (f *fakeBackend) LookupMovie(_ context.Context, id int) (*jobs.Movie, error
 	return nil, errors.New("TMDb has no such movie")
 }
 func (f *fakeBackend) Health(context.Context) []app.Check { return f.health }
+
+func (f *fakeBackend) Settings(context.Context) (settings.Settings, error) {
+	if f.settingsErr != nil {
+		return settings.Defaults(), f.settingsErr
+	}
+	if f.settings == nil {
+		return settings.Defaults(), nil
+	}
+	return *f.settings, nil
+}
+
+func (f *fakeBackend) SaveSettings(_ context.Context, st settings.Settings) error {
+	if st.Languages != nil {
+		if err := st.Languages.Validate(); err != nil {
+			return err
+		}
+	}
+	f.settings = &st
+	return nil
+}
 
 const user, pass = "dan", "correct horse battery"
 
@@ -407,5 +430,84 @@ func TestLoginGuardLockoutEnds(t *testing.T) {
 	}
 	if n := g.fail("1.2.3.4"); n != 1 {
 		t.Errorf("count after the lockout = %d, want a fresh start", n)
+	}
+}
+
+func TestSettingsPage(t *testing.T) {
+	b := newBackend()
+	srv := newServer(t, b)
+	same := map[string]string{"Origin": srv.URL}
+
+	resp, body := do(t, srv, "GET", "/settings", nil, true, nil)
+	if resp.StatusCode != 200 || !strings.Contains(body, `value="default" checked`) || !strings.Contains(body, `name="eject" value="on" checked`) {
+		t.Fatalf("settings page: %d; want MakeMKV's default and eject on", resp.StatusCode)
+	}
+
+	form := url.Values{"eject": nil, "languages": {"chosen"}, "audio": {"fre", "eng"}, "subtitles": {"eng"}, "forced_only": {"on"}}
+	if resp, _ := do(t, srv, "POST", "/settings", form, true, same); resp.StatusCode != 303 {
+		t.Fatalf("save: %d", resp.StatusCode)
+	}
+	got := b.settings
+	if got == nil || got.Eject || got.Languages == nil || strings.Join(got.Languages.Audio, ",") != "eng,fre" || !got.Languages.ForcedOnly {
+		t.Fatalf("saved %+v; want eject off, audio in the page's order (eng, fre), forced only", got)
+	}
+
+	// No audio chosen: refused, with the boxes kept as submitted.
+	form = url.Values{"languages": {"chosen"}, "subtitles": {"eng"}}
+	resp, body = do(t, srv, "POST", "/settings", form, true, same)
+	if resp.StatusCode != 422 || !strings.Contains(body, "at least one audio language") ||
+		!strings.Contains(body, `name="subtitles" value="eng" checked`) {
+		t.Errorf("bad languages: %d; want 422 with the error and the form kept", resp.StatusCode)
+	}
+
+	// Back to MakeMKV's default.
+	if resp, _ := do(t, srv, "POST", "/settings", url.Values{"languages": {"default"}, "eject": {"on"}}, true, same); resp.StatusCode != 303 {
+		t.Fatalf("save default: %d", resp.StatusCode)
+	}
+	if b.settings.Languages != nil || !b.settings.Eject {
+		t.Errorf("saved %+v; want no languages and eject on", b.settings)
+	}
+
+	// The preferred language goes first, whatever the page's order, and
+	// counts as ticked.
+	form = url.Values{"languages": {"chosen"}, "audio": {"eng", "fre"}, "first_audio": {"ger"}}
+	do(t, srv, "POST", "/settings", form, true, same)
+	if got := strings.Join(b.settings.Languages.Audio, ","); got != "ger,eng,fre" {
+		t.Errorf("audio = %s; want the preferred language first: ger,eng,fre", got)
+	}
+	if _, body := do(t, srv, "GET", "/settings", nil, true, nil); !strings.Contains(body, `<option value="ger" selected>`) {
+		t.Error("the page doesn't show the saved preferred language")
+	}
+
+	// Languages ticked with MakeMKV's default on aren't saved, and the page
+	// says so.
+	form = url.Values{"languages": {"default"}, "audio": {"eng"}}
+	resp, _ = do(t, srv, "POST", "/settings", form, true, same)
+	if loc := resp.Header.Get("Location"); resp.StatusCode != 303 || loc != "/settings?saved=ignored" || b.settings.Languages != nil {
+		t.Errorf("default with ticked languages: %d to %q, saved %+v", resp.StatusCode, loc, b.settings.Languages)
+	}
+	if _, body := do(t, srv, "GET", "/settings?saved=ignored", nil, true, nil); !strings.Contains(body, "the ticked languages were not saved") {
+		t.Error("the page doesn't say the ticked languages were ignored")
+	}
+
+	// Like every change, a cross-site POST is refused.
+	if resp, _ := do(t, srv, "POST", "/settings", url.Values{"languages": {"default"}}, true, map[string]string{"Origin": "https://evil.example"}); resp.StatusCode != 403 {
+		t.Errorf("cross-site save: %d, want 403", resp.StatusCode)
+	}
+}
+
+// Settings that can't be read don't lock the page: it opens with the
+// defaults and the reason, and saving it replaces them.
+func TestSettingsPageOpensWhenTheSettingsCantBeRead(t *testing.T) {
+	b := newBackend()
+	b.settingsErr = errors.New("setting eject: invalid character 'y'")
+	srv := newServer(t, b)
+	resp, body := do(t, srv, "GET", "/settings", nil, true, nil)
+	if resp.StatusCode != 200 || !strings.Contains(body, "can&#39;t be read") || !strings.Contains(body, `name="eject" value="on" checked`) {
+		t.Fatalf("settings page: %d; want the page with the defaults and the reason", resp.StatusCode)
+	}
+	b.settingsErr = nil
+	if resp, _ := do(t, srv, "POST", "/settings", url.Values{"languages": {"default"}}, true, map[string]string{"Origin": srv.URL}); resp.StatusCode != 303 || b.settings == nil {
+		t.Errorf("saving over them: %d", resp.StatusCode)
 	}
 }

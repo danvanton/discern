@@ -44,7 +44,9 @@ At the first start, Discern downloads MakeMKV's `makemkvcon` from makemkv.com in
 
 ## Settings
 
-Everything is an environment variable. Secrets can also come from a file: set `NAME_FILE` instead of `NAME`.
+What the container needs to start is set with environment variables, below. Secrets can also come from a file: set `NAME_FILE` instead of `NAME`.
+
+Everything else is on the web UI's **Settings** page, saved in Discern's database: whether to open the tray when a disc is done, and which audio and subtitle languages to keep (until you choose, MakeMKV's own default selection applies). `DISCERN_EJECT` was replaced by the Settings page in v0.1.3; if it is still set, its value is copied to the page once.
 
 | Variable | Default | |
 |---|---|---|
@@ -64,7 +66,6 @@ Everything is an environment variable. Secrets can also come from a file: set `N
 | `DISCERN_MAKEMKVCON` | (none) | use this makemkvcon instead of installing MakeMKV (development, with the fake) |
 | `DISCERN_DRIVES` | `/dev/sr0` | comma-separated |
 | `DISCERN_DRIVE_POLL` | `2s` | |
-| `DISCERN_EJECT` | `true` | eject the disc when its job is done |
 | `DISCERN_INSECURE_NO_AUTH` | `false` | development only: turns the login off |
 
 ## Legal

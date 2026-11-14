@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/danvanton/discern/internal/makemkv/fake"
 	"github.com/danvanton/discern/internal/radarr"
 	"github.com/danvanton/discern/internal/radarr/radarrtest"
+	"github.com/danvanton/discern/internal/settings"
 	"github.com/danvanton/discern/internal/steps"
 	"github.com/danvanton/discern/internal/store"
 )
@@ -43,6 +45,10 @@ TINFO:0,16,0,"00800.mpls"
 TINFO:0,27,0,"The Matrix_t00.mkv"
 SINFO:0,0,1,6201,"Video"
 SINFO:0,0,19,0,"3840x2160"
+SINFO:0,1,1,6202,"Audio"
+SINFO:0,1,3,0,"eng"
+SINFO:0,2,1,6202,"Audio"
+SINFO:0,2,3,0,"fre"
 TINFO:1,9,0,"0:05:00"
 TINFO:1,11,0,"65536"
 TINFO:1,16,0,"00801.mpls"
@@ -97,9 +103,12 @@ func newWorld(t *testing.T, ripDelay int, db string) *world {
 	runner.Env = []string{fake.EnvVar + "=" + string(sc)}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	engine := jobs.NewEngine(st, steps.New(runner, imp), staging, log)
+	jobSteps := steps.New(runner, imp)
+	engine := jobs.NewEngine(st, jobSteps, staging, log)
 	a := New(ctx, st, engine, rc, log)
 	a.Drives, a.MakeMKVCon = []string{"/dev/sr0"}, exe
+	a.MakeMKVSettings = filepath.Join(dir, "settings.conf")
+	jobSteps.BeforeRip = a.ApplyLanguages
 	return &world{app: a, store: st, radarr: fr, staging: staging, db: db, cancel: cancel}
 }
 
@@ -273,5 +282,91 @@ func TestHealthReportsWhatIsBroken(t *testing.T) {
 	}
 	if !got["database"] || got["makemkvcon"] || got["radarr"] {
 		t.Errorf("health = %v, want database ok, makemkvcon and radarr failing", got)
+	}
+}
+
+// rip runs one disc through to state want, approving the suggested titles.
+func (w *world) rip(t *testing.T, want jobs.State) *jobs.Job {
+	t.Helper()
+	ctx := context.Background()
+	j, err := w.app.DiscInserted(ctx, "/dev/sr0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := w.waitFor(t, j.ID, jobs.NeedsYou)
+	if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil); err != nil {
+		t.Fatal(err)
+	}
+	done := w.waitFor(t, j.ID, want)
+	w.app.Wait(5 * time.Second)
+	return done
+}
+
+// Eject follows the Settings page (decision D25).
+func TestEjectFollowsTheSettingsPage(t *testing.T) {
+	w := newWorld(t, 0, "")
+	ejected := 0
+	var mu sync.Mutex
+	w.app.Eject = func(string) error { mu.Lock(); ejected++; mu.Unlock(); return nil }
+	if err := w.app.SaveSettings(context.Background(), settings.Settings{Eject: false}); err != nil {
+		t.Fatal(err)
+	}
+	w.rip(t, jobs.Done)
+	mu.Lock()
+	defer mu.Unlock()
+	if ejected != 0 {
+		t.Errorf("ejected %d times with eject off", ejected)
+	}
+}
+
+// The saved languages reach MakeMKV's settings before the rip; clearing them
+// removes Discern's rule again (decisions D20, D24).
+func TestLanguagesReachMakeMKVBeforeTheRip(t *testing.T) {
+	w := newWorld(t, 0, "")
+	ctx := context.Background()
+	conf := w.app.MakeMKVSettings
+	langs := &settings.Languages{Audio: []string{"eng"}, Subtitles: []string{"eng"}}
+	if err := w.app.SaveSettings(ctx, settings.Settings{Eject: true, Languages: langs}); err != nil {
+		t.Fatal(err)
+	}
+	w.rip(t, jobs.Done)
+	b, _ := os.ReadFile(conf)
+	if !strings.Contains(string(b), `app_DefaultSelectionString = "-sel:all,+sel:video,+sel:(audio&(eng|nolang|single))`) {
+		t.Errorf("settings.conf = %q; want the English rule", b)
+	}
+
+	// Clearing them; the next rip's hook removes the rule. (A second real rip
+	// would re-import The Matrix, which Radarr already has.)
+	if err := w.app.SaveSettings(ctx, settings.Settings{Eject: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.app.ApplyLanguages(ctx, &jobs.Job{}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(conf); strings.Contains(string(b), "app_DefaultSelectionString") {
+		t.Errorf("settings.conf = %q; want Discern's rule removed", b)
+	}
+}
+
+// A title with no audio in the chosen languages (a foreign film) keeps its
+// own audio for that rip, after the chosen languages.
+func TestAForeignTitleKeepsItsOwnAudio(t *testing.T) {
+	w := newWorld(t, 0, "")
+	langs := &settings.Languages{Audio: []string{"jpn"}, Subtitles: []string{"jpn"}}
+	if err := w.app.SaveSettings(context.Background(), settings.Settings{Eject: true, Languages: langs}); err != nil {
+		t.Fatal(err)
+	}
+	w.rip(t, jobs.Done)
+	b, _ := os.ReadFile(w.app.MakeMKVSettings)
+	if !strings.Contains(string(b), "+sel:(audio&(jpn|eng|fre|nolang|single))") || !strings.Contains(string(b), "+sel:(subtitle&(jpn))") {
+		t.Errorf("settings.conf = %q; want the title's own eng and fre audio added after jpn, subtitles as chosen", b)
+	}
+}
+
+func TestSaveSettingsRefusesBadLanguages(t *testing.T) {
+	w := newWorld(t, 0, "")
+	err := w.app.SaveSettings(context.Background(), settings.Settings{Languages: &settings.Languages{}})
+	if err == nil {
+		t.Fatal("languages without audio were saved")
 	}
 }

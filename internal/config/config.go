@@ -26,7 +26,6 @@ type Config struct {
 	MakeMKVKey string        // written into MakeMKV's settings; empty leaves them alone
 	Drives     []string      // optical drives to watch
 	DrivePoll  time.Duration // how often drives are checked
-	Eject      bool          // eject the disc when its job is done
 
 	RadarrURL            string
 	RadarrAPIKey         string
@@ -61,7 +60,6 @@ func Load(getenv Getenv, readFile ReadFile) (Config, error) {
 		MakeMKVKey: r.secret("MAKEMKV_KEY"),
 		Drives:     r.list("DISCERN_DRIVES", "/dev/sr0"),
 		DrivePoll:  r.duration("DISCERN_DRIVE_POLL", 2*time.Second),
-		Eject:      r.boolean("DISCERN_EJECT", true),
 
 		RadarrURL:            r.str("DISCERN_RADARR_URL", ""),
 		RadarrAPIKey:         r.secret("DISCERN_RADARR_API_KEY"),

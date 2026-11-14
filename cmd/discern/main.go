@@ -10,9 +10,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -55,19 +57,19 @@ func checkStagingFilesystem(log *slog.Logger, staging, library string) {
 // It runs before the web server starts, so a container that can't install
 // MakeMKV stops with the reason in its log, as a bad setting does, and
 // Docker's restart policy tries again.
-func setUpMakeMKV(ctx context.Context, log *slog.Logger, cfg config.Config) (string, error) {
-	makemkvcon := cfg.MakeMKVCon
+func setUpMakeMKV(ctx context.Context, log *slog.Logger, cfg config.Config) (makemkvcon, settingsPath string, err error) {
+	makemkvcon = cfg.MakeMKVCon
 	if makemkvcon != "" {
 		log.Info("using the makemkvcon in DISCERN_MAKEMKVCON; Discern installs nothing", "path", makemkvcon)
 	} else {
 		pin, err := install.Pinned()
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		in := &install.Installer{Dir: cfg.MakeMKVDir, Release: pin, AcceptEULA: cfg.AcceptEULA, Arch: runtime.GOARCH}
 		did, err := in.Ensure(ctx)
 		if err != nil {
-			return "", fmt.Errorf("MakeMKV %s: %w", pin.Version, err)
+			return "", "", fmt.Errorf("MakeMKV %s: %w", pin.Version, err)
 		}
 		makemkvcon = in.Makemkvcon()
 		if did {
@@ -76,20 +78,23 @@ func setUpMakeMKV(ctx context.Context, log *slog.Logger, cfg config.Config) (str
 			log.Info("MakeMKV is installed", "version", pin.Version)
 		}
 	}
+	// MakeMKV's settings file: the key goes in now, the language choice
+	// before each rip. This is the one place its path is worked out.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", fmt.Errorf("finding MakeMKV's settings: %w", err)
+	}
+	settingsPath = install.SettingsPath(home)
 	if cfg.MakeMKVKey != "" {
-		home, err := os.UserHomeDir()
+		changed, err := install.WriteKey(settingsPath, cfg.MakeMKVKey)
 		if err != nil {
-			return "", fmt.Errorf("finding MakeMKV's settings: %w", err)
-		}
-		changed, err := install.WriteKey(install.SettingsPath(home), cfg.MakeMKVKey)
-		if err != nil {
-			return "", fmt.Errorf("writing the MakeMKV key: %w", err)
+			return "", "", fmt.Errorf("writing the MakeMKV key: %w", err)
 		}
 		if changed {
 			log.Info("MakeMKV key saved in its settings")
 		}
 	}
-	return makemkvcon, nil
+	return makemkvcon, settingsPath, nil
 }
 
 // version is set at build time with -ldflags "-X main.version=v0.1.0".
@@ -146,7 +151,7 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	makemkvcon, err := setUpMakeMKV(ctx, log, cfg)
+	makemkvcon, makemkvSettings, err := setUpMakeMKV(ctx, log, cfg)
 	if err != nil {
 		if ctx.Err() != nil {
 			// Stopped mid-install (docker stop): an interruption, not a
@@ -167,8 +172,32 @@ func run(log *slog.Logger) error {
 
 	a := app.New(ctx, st, engine, rc, log)
 	a.Drives, a.MakeMKVCon = cfg.Drives, makemkvcon
-	if cfg.Eject {
-		a.Eject = drive.Eject
+	// Whether to eject is on the Settings page now (decision D25).
+	a.Eject = drive.Eject
+	// DISCERN_EJECT is gone, but its value is kept once: it becomes the
+	// Settings page's starting value if eject was never saved there.
+	if v := os.Getenv("DISCERN_EJECT"); v != "" {
+		eject, perr := strconv.ParseBool(v)
+		seeded := false
+		if perr == nil {
+			if seeded, err = st.SeedEject(ctx, eject); err != nil {
+				return fmt.Errorf("saving DISCERN_EJECT as a setting: %w", err)
+			}
+		}
+		log.Warn("DISCERN_EJECT is no longer used: set eject on the Settings page", "copied_to_settings", seeded)
+	}
+	// The language choice goes into MakeMKV's settings before each rip, when
+	// Discern installed MakeMKV; not for a makemkvcon given by DISCERN_MAKEMKVCON.
+	if cfg.MakeMKVCon == "" {
+		a.MakeMKVSettings = makemkvSettings
+	}
+	jobSteps.BeforeRip = a.ApplyLanguages
+	jobSteps.Trimmed = a.LanguagesChosen
+	// Verify reads each rip's tracks with mkvmerge, which the image has.
+	if bin, err := exec.LookPath("mkvmerge"); err == nil {
+		jobSteps.Tracks = steps.Mkvmerge(bin)
+	} else {
+		log.Warn("mkvmerge not found: rips are checked by size only, not for missing audio")
 	}
 	if err := a.Resume(ctx); err != nil {
 		return fmt.Errorf("resuming jobs: %w", err)

@@ -341,3 +341,83 @@ func TestScanWaitsForTheDriveBeforeEveryAttempt(t *testing.T) {
 		t.Fatalf("err = %v after %d scans; want the drive's error and no scan", err, *calls)
 	}
 }
+
+// With chosen languages the file is smaller by the tracks left out, so the
+// size floor is lower; an early stop is still far below it.
+func TestVerifyAllowsSmallerFilesWhenLanguagesTrimThem(t *testing.T) {
+	disc := titles(makemkv.Title{Index: 0, SizeBytes: 1000, OutputFile: "Movie_t00.mkv"})
+	j := &jobs.Job{Disc: disc, Titles: []int{0}}
+	for size, c := range map[int]struct {
+		trimmed bool
+		wantErr string
+	}{
+		520: {false, "52% of the size"}, // five lossless tracks cut to one
+		521: {true, ""},
+		9:   {true, "1% of the size"}, // the Kill Bill stall
+	} {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "Movie_t00.mkv"), size)
+		s := New(nil, nil)
+		s.Trimmed = func(context.Context) (bool, error) { return c.trimmed, nil }
+		err := s.Verify(context.Background(), j, dir)
+		if c.wantErr == "" && err != nil || c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)) {
+			t.Errorf("%d bytes, trimmed %v: err = %v; want %q", size, c.trimmed, err, c.wantErr)
+		}
+	}
+
+	// A settings read that fails is an error, not the default floor.
+	s := New(nil, nil)
+	s.Trimmed = func(context.Context) (bool, error) { return false, errors.New("database is closed") }
+	if err := s.Verify(context.Background(), j, t.TempDir()); err == nil {
+		t.Error("Verify ignored a failed settings read")
+	}
+}
+
+// Verify reads the finished file's tracks: a rip without audio, from a title
+// that has audio, is not imported.
+func TestVerifyChecksTheFilesTracks(t *testing.T) {
+	audio := []makemkv.Stream{{Type: "Video"}, {Type: "Audio", Lang: "jpn"}}
+	for name, c := range map[string]struct {
+		streams []makemkv.Stream
+		got     FileTracks
+		readErr error
+		wantErr string
+	}{
+		"video and audio":              {audio, FileTracks{Video: 1, Audio: 2}, nil, ""},
+		"silent rip":                   {audio, FileTracks{Video: 1}, nil, "has no audio track"},
+		"title without audio":          {[]makemkv.Stream{{Type: "Video"}}, FileTracks{Video: 1}, nil, ""},
+		"no video":                     {audio, FileTracks{Audio: 1}, nil, "has no video track"},
+		"not a file mkvmerge can read": {audio, FileTracks{}, errors.New("mkvmerge doesn't recognise it"), "doesn't recognise"},
+	} {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "Movie_t00.mkv"), 950)
+		j := &jobs.Job{Titles: []int{0}, Disc: titles(makemkv.Title{Index: 0, SizeBytes: 1000, OutputFile: "Movie_t00.mkv", Streams: c.streams})}
+		s := New(nil, nil)
+		s.Tracks = func(context.Context, string) (FileTracks, error) { return c.got, c.readErr }
+		err := s.Verify(context.Background(), j, dir)
+		if c.wantErr == "" && err != nil || c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)) {
+			t.Errorf("%s: err = %v; want %q", name, err, c.wantErr)
+		}
+	}
+}
+
+func TestParseIdentification(t *testing.T) {
+	// The shape of "mkvmerge -J" output, cut down to what Discern reads.
+	out := `{"container":{"recognized":true,"supported":true,"type":"Matroska"},"errors":[],"tracks":[
+		{"codec":"HEVC/H.265/MPEG-H","id":0,"type":"video"},
+		{"codec":"TrueHD Atmos","id":1,"type":"audio"},{"codec":"AC-3","id":2,"type":"audio"},
+		{"codec":"HDMV PGS","id":3,"type":"subtitles"}],"warnings":[]}`
+	got, err := parseIdentification([]byte(out))
+	if err != nil || got != (FileTracks{Video: 1, Audio: 2, Subtitles: 1}) {
+		t.Errorf("parseIdentification = %+v, %v", got, err)
+	}
+	for name, bad := range map[string]string{
+		"not recognised": `{"container":{"recognized":false,"supported":false},"tracks":[]}`,
+		"not JSON":       `Error: The file could not be opened`,
+		"empty":          ``,
+	} {
+		if _, err := parseIdentification([]byte(bad)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

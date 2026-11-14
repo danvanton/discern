@@ -15,6 +15,7 @@ import (
 // funcs are the helpers templates can call. Each one formats; none decides.
 var funcs = template.FuncMap{
 	"clock": format.Clock,
+	"has":   slices.Contains[[]string, string],
 	"bytes": format.Bytes,
 	"pct":   func(p float64) int { return int(p*100 + 0.5) },
 	"ago":   ago,

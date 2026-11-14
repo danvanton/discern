@@ -39,6 +39,16 @@ type Steps struct {
 	// up isn't scanned. Its error ends the scan.
 	WaitReady func(ctx context.Context, drive string) error
 
+	// BeforeRip, if set, runs before a job's titles are ripped: the app uses
+	// it to apply the language settings to MakeMKV. Its error stops the rip.
+	BeforeRip func(ctx context.Context, j *jobs.Job) error
+
+	// Trimmed, if set, reports whether rips keep only chosen languages, so
+	// Verify expects smaller files (app.LanguagesChosen).
+	Trimmed func(ctx context.Context) (bool, error)
+	// Tracks, if set, reads a ripped file's tracks for Verify (Mkvmerge).
+	Tracks func(ctx context.Context, file string) (FileTracks, error)
+
 	info func(ctx context.Context, drive string) (*makemkv.Disc, error) // runner.Info; tests replace it
 
 	mu      sync.Mutex
@@ -141,6 +151,11 @@ func (s *Steps) Select(_ context.Context, j *jobs.Job) (jobs.Selection, error) {
 // subfolder and its file then moved up into dir, where Verify and Import
 // look. Progress is reported for all titles together, weighted by size.
 func (s *Steps) Rip(ctx context.Context, j *jobs.Job, dir string, progress func(float64)) error {
+	if s.BeforeRip != nil {
+		if err := s.BeforeRip(ctx, j); err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
