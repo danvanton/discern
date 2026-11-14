@@ -1,6 +1,6 @@
 # Discern: design
 
-**Status:** draft, 2026-11-13. Decisions D1–D19 were accepted by the owner on 2026-11-13. A new decision starts as **Proposed** and becomes **Accepted** once the owner approves it. The decision log (section 17) holds the reasons.
+**Status:** draft, 2026-11-13. Decisions D1–D23 were accepted by the owner on 2026-11-13. A new decision starts as **Proposed** and becomes **Accepted** once the owner approves it. The decision log (section 17) holds the reasons.
 
 Discern turns a disc in a drive into a correctly named file in your library, with no clicks when it is sure and one question when it is not. It runs MakeMKV, works out which titles on the disc are the movie or the episodes, rips only those, and hands them to Radarr or Sonarr, or files them itself.
 
@@ -215,7 +215,7 @@ flowchart LR
 1. Ask Radarr to scan the job's staging folder, and use Radarr's own entry for the file. That way the path and languages are what Radarr itself read. This comes first, so a wrong path mapping fails before anything is added to the library.
 2. If a Manual Import for this file is already running (a retry after a timeout), wait for that one instead of starting a second.
 3. Otherwise, add the movie if it is missing. It is always added unmonitored, with no search, so Discern never makes Radarr download anything. That rule is in the client itself: a caller can't turn it on.
-4. Set the movie and the quality on the entry. The quality object is Radarr's own, from its quality definitions, never built by hand. The grade is the higher of what the video's width and height say: a scope film stored as 1920x800 and an anamorphic 1440x1080 Blu-ray are both `Remux-1080p`.
+4. Set the movie and the quality on the entry. The quality object is Radarr's own, from its quality definitions, never built by hand. It goes in wrapped as Radarr's `QualityModel`, `{"quality": …, "revision": …}`, keeping the revision from Radarr's own scan entry. Sent bare, Radarr 6.4.4 files the movie as "Unknown": the first real import did exactly that (2026-11-13), and the fake Radarr, which had copied Discern's mistake, now follows Radarr's published API definition. The release group is cleared, since Radarr would otherwise read one from the staging folder's name. The grade is the higher of what the video's width and height say: a scope film stored as 1920x800 and an anamorphic 1440x1080 Blu-ray are both `Remux-1080p`.
 5. Send a Manual Import with `importMode: move`.
 6. Wait for *that* command's ID, not Radarr's whole queue. A few failed status checks in a row (Radarr restarting) are tolerated, because the command keeps running in Radarr regardless.
 
@@ -223,7 +223,7 @@ flowchart LR
 
 **Path mapping.** Discern and Radarr usually mount the same storage at different places. `PathMap` translates the staging folder, and refuses anything outside it, so it doubles as the guard on what Radarr is asked to import.
 
-**Safe to rerun.** An empty staging folder plus a movie whose file Radarr added *after the job started* means the import already happened before a crash, so `Import` returns success without sending anything. If the movie's file is older than the job, it's the user's earlier copy: the rip has gone missing, and that is an error, not a success.
+**Safe to rerun.** An empty staging folder plus a movie whose file Radarr added *after the job started* means the import already happened, before a crash or a failed check. `Import` sends nothing then, but still checks the file: a Retry can't call an import filed as Unknown done. Any known quality passes, because the user may have set a different one in Radarr on purpose. Discern doesn't correct a wrong quality itself: the job's error says to set it under Manage Files in Radarr and retry. If the movie's file is older than the job, it's the user's earlier copy: the rip has gone missing, and that is an error, not a success.
 
 **Identify.** `internal/identify` cleans the disc label:
 - `SOLO_A_STAR_WARS_STORY` becomes "Solo A Star Wars Story";
@@ -402,6 +402,7 @@ The benchmark runs in CI, and a pull request that makes "wrong" go up fails. Tha
 - **Java** (decision D17). The image includes Debian's headless Java. `makemkv-bin` ships `blues.jar`, MakeMKV's runner for a disc's Java menu (BD-J), so Java does get used. Without it, the `SEG_MainFeature` evidence is missing on exactly the discs that need it. How much it adds to the image, and how often it matters, is still to measure (section 19).
 - **Process rules.** One `makemkvcon` per drive. No drive listing while any rip runs. Each process gets a timeout, and output is read line by line as it streams, never buffered whole.
 - **Errors by code.** Failures are recognised by MakeMKV's numeric `MSG` codes and turned into specific errors ("disc unreadable", "key expired", "drive not supported").
+- **Incomplete scans fail closed.** MakeMKV can log read errors (`MSG 2003`) and skipped titles (`3016`, `5043`), then report "Operation successfully completed" and exit 0. On the first real run a UHD scan made while the drive was still spinning up had 1,204 read errors and 35 skipped titles, and its titles no longer matched a clean scan of the same disc. Two things now prevent that. Before every scan, Discern waits for the kernel to report the drive ready (`drive.WaitReady`: `CDROM_DRIVE_STATUS` polled each second for up to 2 minutes; a tray that is open or empty fails at once). And a skipped title, or a read error that says the drive was `NOT READY`, makes the scan an error (`makemkv.IncompleteScanError`). Other read errors alone don't: copy-protected DVDs (ARccOS, RipGuard) carry deliberately unreadable sectors that MakeMKV reads around on every scan, and a title it really can't read is reported as skipped. Scan and CheckDisc try an incomplete scan again after 30 s, up to 3 scans in all. If every attempt is incomplete, the job fails with the counts and MakeMKV's first message. A scratched disc with one unreadable extra therefore can't be ripped yet; an override is for later.
 
 ### 9.2 The rip watchdog
 
@@ -461,6 +462,16 @@ The second route skips MakeMKV's muxer entirely. Opening the backup in MakeMKV i
 
 - **Web UI:** server-rendered HTML (Go's `html/template`) with htmx for live parts such as progress bars and the queue (decision D4). There is no JavaScript build step, and the whole UI ships inside the Go binary with `embed`.
   - **Pages:** Dashboard (drives, current jobs), Needs you, History, Settings.
+  - **Redesign (planned after the first homelab run, 2026-11-13).** The owner's requirements from that run:
+    - **Mobile-first.** Approving a disc from a phone must work well: stacked cards, large touch targets, the decision on one screen.
+    - **No job numbers.** A job is named by its movie (or the disc's name until the movie is known) and when it started. Whole cards are links; the URL keeps an internal id that the UI never shows.
+    - **Clear drive and disc states:** tray open, empty, disc loading, reading, ripping, done.
+    - **Elapsed time and time left** for scans and rips. MakeMKV's progress lines are there for both.
+    - **Posters as the visual anchor of a job** (decision D23).
+    - **A calmer title list:** the suggested title and its reason up front; extras and short clips folded away and grouped.
+    - **Audio and subtitle languages** chosen per job, with a global default (decisions D20, D21).
+    - **Failures in plain words,** with MakeMKV's own messages folded underneath.
+  - It stays server-rendered with htmx (D4), and nothing is inline (the Content-Security-Policy).
 - **REST API:** `/api/v1/...` over the same data, with an API key, for scripts and for Homarr-style dashboard widgets.
 - **Events out:** a webhook on job changes, and Apprise support, so Discord, ntfy and others work without Discern knowing each one.
 - **Health:**
@@ -599,6 +610,10 @@ Recordings come from real discs. When a disc behaves oddly in real use, its scan
 | D17 | Image: **Debian 13 slim**, with **headless Java** and **MKVToolNix** | Accepted | `makemkvcon` is built against glibc, and MakeMKV's libraries need libavcodec, OpenSSL, expat and zlib from apt. MakeMKV ships `blues.jar` to run BD-J menus, the source of `SEG_MainFeature` on the discs that need it most. MKVToolNix does verification and the remux fallback. | Alpine (musl can't run `makemkvcon`); distroless (no apt for the libraries); leaving Java out until measured, or a second image tag without it |
 | D18 | **Non-root by default** (uid 10001), with the user and the drive's group set in compose (`user:`, `group_add:`) | Accepted | The container never runs anything as root. Files in staging belong to the user Radarr already reads as. It is plain Docker, with nothing custom to explain. | linuxserver-style `PUID`/`PGID`, with a root entrypoint that drops privileges (familiar, but the container starts as root) |
 | D19 | Release: **multi-arch image on GHCR, with an SBOM, provenance and a keyless cosign signature**, on a version tag, after the CI checks | Accepted | These are a few lines each with the standard Docker actions, and they let anyone check what the image contains and that this repository's workflow built it. | Build and push only, and sign later at v1.0 |
+| D20 | Pick audio and subtitle tracks with **MakeMKV's own selection rules**, written into its `settings.conf` (`app_DefaultSelectionString`, `app_PreferredLanguage`) before each rip | Accepted | One pass: `makemkvcon` keeps only the chosen tracks while it rips, with no extra time or space. MakeMKV's rule language already handles tracks without a language and forced subtitles. Discern already writes `settings.conf` (the key). The settings are shared by every `makemkvcon`, so several drives ripping at once (v0.4) will need a settings file per drive. | Rip every track, then keep the chosen ones with mkvmerge (exact control per track, but an extra pass over the whole file and twice the space while it runs) |
+| D21 | Global settings, starting with the default languages, live on a **Settings page in the web UI, stored in SQLite** | Accepted | They can change any time without a restart, and DESIGN already planned a Settings page. Environment variables stay for what the container needs before it starts (paths, Radarr, secrets). | An environment variable such as `DISCERN_LANGUAGES` (edit the app and restart to change it) |
+| D22 | **Redesign the web UI** around each page's moment (dashboard, review, ripping, failure), mobile-first, still server-rendered with htmx | Accepted | The first homelab run showed what the pages must answer: what is the drive doing, how long is left, which movie is it, and why did it fail. Keeping D4 means no build step and no second language. | Polish the current pages only (keeps their structure); a JavaScript single-page app (undoes D4 and adds a build step, for nothing on the wish list) |
+| D23 | **Posters from Radarr's movie lookup**, downloaded once, cached in `/config` and served by Discern itself | Accepted | Radarr already returns TMDb's poster URL, so no new API key. The Content-Security-Policy stays `'self'`, and the browser never contacts TMDb. | The browser loading `image.tmdb.org` directly (opens the CSP, and tells TMDb what is viewed); TMDb's API with a key of our own (another secret and dependency) |
 
 ---
 

@@ -160,6 +160,9 @@ func run(log *slog.Logger) error {
 	tracker := drive.NewTracker()
 	jobSteps := steps.New(runner, imp)
 	jobSteps.Tray = tracker
+	jobSteps.WaitReady = func(ctx context.Context, d string) error {
+		return drive.WaitReady(ctx, d, 2*time.Minute, time.Second)
+	}
 	engine := jobs.NewEngine(st, jobSteps, cfg.StagingDir, log)
 
 	a := app.New(ctx, st, engine, rc, log)

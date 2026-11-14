@@ -115,6 +115,11 @@ func (r *Runner) Info(ctx context.Context, device string) (*Disc, error) {
 
 	switch {
 	case waitErr == nil && parseErr == nil:
+		// MakeMKV can report "Operation successfully completed" and exit 0
+		// after failing to read parts of the disc. Fail closed instead.
+		if err := checkComplete(disc); err != nil {
+			return nil, err
+		}
 		return disc, nil
 	case ctx.Err() != nil:
 		return nil, fmt.Errorf("makemkvcon info: %w", ctx.Err())

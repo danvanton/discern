@@ -83,12 +83,19 @@ func TestImportAddsTheMovieUnmonitoredAndImports(t *testing.T) {
 	}
 
 	// The import: a move, of Radarr's path for the file, as Remux-2160p.
+	// Quality is Radarr's QualityModel (the quality plus the revision from
+	// Radarr's own scan), and the folder-name release group is cleared.
 	cmd := s.fake.Imports()[0]
 	file := cmd["files"].([]any)[0].(map[string]any)
-	quality := file["quality"].(map[string]any)
+	model, _ := file["quality"].(map[string]any)
+	quality, _ := model["quality"].(map[string]any)
+	revision, _ := model["revision"].(map[string]any)
 	if cmd["importMode"] != "move" || file["path"] != "/data/staging/42/The Matrix_t00.mkv" ||
-		quality["name"] != "Remux-2160p" || quality["source"] != "bluray" {
+		quality["name"] != "Remux-2160p" || quality["source"] != "bluray" || revision["version"] != float64(1) {
 		t.Errorf("import command = %v", cmd)
+	}
+	if file["releaseGroup"] != "" {
+		t.Errorf("release group = %v, want empty (not the staging folder's name)", file["releaseGroup"])
 	}
 	if langs, _ := file["languages"].([]any); len(langs) != 1 {
 		t.Errorf("languages from Radarr's own scan were not kept: %v", file["languages"])
@@ -363,5 +370,32 @@ func TestIdentifyLabelsThatSayNothing(t *testing.T) {
 	s.job.Disc.Volume, s.job.Disc.Name = "BD_ROM", "The Matrix"
 	if m, err := s.imp.Identify(ctx, s.job); err != nil || m == nil || m.TMDbID != 603 {
 		t.Errorf("fell back to the disc name: got %+v, %v", m, err)
+	}
+}
+
+// TestRetryAfterAWronglyFiledImportChecksAgain is the homelab case: Radarr
+// filed the rip as Unknown, the job failed, and a retry found the import
+// already done. The retry must not call it done while it is Unknown, must
+// accept whatever quality the user then sets (even one Discern wouldn't
+// choose), and must not import again.
+func TestRetryAfterAWronglyFiledImportChecksAgain(t *testing.T) {
+	s := newSetup(t)
+	s.fake.SetBehaviour(radarrtest.Behaviour{WrongQuality: true})
+	err := s.imp.Import(ctx, s.job, s.staging)
+	if err == nil || !strings.Contains(err.Error(), "set the quality under Manage Files") {
+		t.Fatalf("first Import: err = %v, want a wrong-quality error that says how to fix it", err)
+	}
+
+	s.fake.SetFileQuality(s.job.Movie.TMDbID, "Unknown")
+	if err := s.imp.Import(ctx, s.job, s.staging); err == nil || !strings.Contains(err.Error(), "quality Unknown") {
+		t.Fatalf("retry with the quality Unknown: err = %v, want an error", err)
+	}
+
+	s.fake.SetFileQuality(s.job.Movie.TMDbID, "Bluray-2160p")
+	if err := s.imp.Import(ctx, s.job, s.staging); err != nil {
+		t.Fatalf("retry after the user set a quality in Radarr: %v", err)
+	}
+	if n := len(s.fake.Imports()); n != 1 {
+		t.Errorf("sent %d imports, want 1: a retry must not import again", n)
 	}
 }

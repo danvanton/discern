@@ -245,9 +245,24 @@ type QualityDefinition struct {
 	Quality json.RawMessage `json:"quality"`
 }
 
-// QualityNamed returns Radarr's own quality object for name, ready to send
-// in a Manual Import. It is returned raw so every field Radarr has goes back
-// to it unchanged.
+// QualityModel is the quality field of a Manual Import file: Radarr's
+// QualityModel, {"quality": …, "revision": …}, not the bare quality object.
+// Given the bare one, Radarr files the movie as "Unknown" (seen with Radarr
+// 6.4.4). The revision comes from the scan entry Radarr returned, when it has
+// one, so Radarr's own reading of the file is kept.
+func QualityModel(quality json.RawMessage, scanned any) map[string]any {
+	revision := any(map[string]any{"version": 1, "real": 0, "isRepack": false})
+	if m, ok := scanned.(map[string]any); ok {
+		if r, ok := m["revision"].(map[string]any); ok {
+			revision = r
+		}
+	}
+	return map[string]any{"quality": quality, "revision": revision}
+}
+
+// QualityNamed returns Radarr's own quality object for name, to send in a
+// Manual Import wrapped by QualityModel. It is returned raw so every field
+// Radarr has goes back to it unchanged.
 func (c *Client) QualityNamed(ctx context.Context, name string) (json.RawMessage, error) {
 	var defs []QualityDefinition
 	if err := c.do(ctx, http.MethodGet, "/qualitydefinition", nil, nil, &defs); err != nil {

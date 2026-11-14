@@ -131,10 +131,37 @@ func (s *Server) AddLibraryMovie(tmdbID int, title string, year int, hasFile boo
 	m := map[string]any{"id": s.nextID, "tmdbId": tmdbID, "title": title, "year": year, "hasFile": hasFile}
 	if hasFile {
 		m["movieFile"] = map[string]any{"relativePath": title + ".mkv", "dateAdded": "2020-01-01T00:00:00Z",
-			"quality": map[string]any{"quality": map[string]any{"name": "Remux-1080p"}}}
+			"quality": qualityModel("Remux-1080p")}
 	}
 	s.nextID++
 	s.movies = append(s.movies, m)
+}
+
+// SetFileQuality changes the quality of a movie's file, as the user does
+// under Manage Files in Radarr.
+func (s *Server) SetFileQuality(tmdbID int, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, m := range s.movies {
+		if asInt(m["tmdbId"]) != tmdbID {
+			continue
+		}
+		if f, ok := m["movieFile"].(map[string]any); ok {
+			f["quality"] = qualityModel(name)
+		}
+	}
+}
+
+// asInt reads a number stored either by the fake (int) or decoded from a
+// request's JSON (float64).
+func asInt(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case float64:
+		return int(n)
+	}
+	return -1
 }
 
 // RunningImport queues a Manual Import of remotePath for movieID, as if an
@@ -144,7 +171,7 @@ func (s *Server) RunningImport(remotePath string, movieID int) {
 	defer s.mu.Unlock()
 	body := map[string]any{"name": "ManualImport", "importMode": "move", "files": []any{
 		map[string]any{"path": remotePath, "movieId": float64(movieID),
-			"quality": map[string]any{"name": "Remux-2160p"}},
+			"quality": qualityModel("Remux-2160p")},
 	}}
 	s.commands[7] = &command{status: "started", body: body}
 }
@@ -253,11 +280,16 @@ func (s *Server) scan(w http.ResponseWriter, r *http.Request) {
 		if e.IsDir() {
 			continue
 		}
+		// As Radarr's ManualImportResource: quality is a QualityModel
+		// (quality plus revision), and the release group is Radarr's guess
+		// from the folder name.
 		out = append(out, map[string]any{
-			"path":       path.Join(folder, e.Name()),
-			"name":       e.Name(),
-			"languages":  []any{map[string]any{"id": 1, "name": "English"}},
-			"rejections": []any{},
+			"path":         path.Join(folder, e.Name()),
+			"name":         e.Name(),
+			"quality":      qualityModel("Unknown"),
+			"releaseGroup": path.Base(folder),
+			"languages":    []any{map[string]any{"id": 1, "name": "English"}},
+			"rejections":   []any{},
 		})
 	}
 	writeJSON(w, out)
@@ -307,12 +339,24 @@ func (s *Server) runImport(body map[string]any) {
 	for _, raw := range files {
 		file, _ := raw.(map[string]any)
 		id, _ := file["movieId"].(float64)
-		q, _ := file["quality"].(map[string]any)
-		name := q["name"]
+		p, _ := file["path"].(string)
+		// Radarr reads quality.quality; anything else leaves it Unknown,
+		// which is what the real Radarr did with a bare quality object.
+		name := "Unknown"
+		if model, ok := file["quality"].(map[string]any); ok {
+			if q, ok := model["quality"].(map[string]any); ok {
+				if n, ok := q["name"].(string); ok {
+					name = n
+				}
+			}
+		}
+		group, ok := file["releaseGroup"].(string)
+		if !ok {
+			group = path.Base(path.Dir(p))
+		}
 		if s.b.WrongQuality {
 			name = "DVD"
 		}
-		p, _ := file["path"].(string)
 		for _, m := range s.movies {
 			if m["id"] != int(id) {
 				continue
@@ -325,8 +369,9 @@ func (s *Server) runImport(body map[string]any) {
 			}
 			m["hasFile"] = true
 			m["movieFile"] = map[string]any{"relativePath": path.Base(dst),
-				"dateAdded": time.Now().UTC().Format(time.RFC3339Nano),
-				"quality":   map[string]any{"quality": map[string]any{"name": name}}}
+				"dateAdded":    time.Now().UTC().Format(time.RFC3339Nano),
+				"quality":      qualityModel(name),
+				"releaseGroup": group}
 		}
 	}
 }
@@ -344,4 +389,12 @@ func (s *Server) listCommands(w http.ResponseWriter, _ *http.Request) {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+// qualityModel is Radarr's QualityModel: a quality and its revision.
+func qualityModel(name string) map[string]any {
+	return map[string]any{
+		"quality":  map[string]any{"name": name},
+		"revision": map[string]any{"version": 1, "real": 0, "isRepack": false},
+	}
 }

@@ -5,10 +5,12 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/danvanton/discern/internal/importer"
 	"github.com/danvanton/discern/internal/jobs"
@@ -26,6 +28,19 @@ type Steps struct {
 		Generation(drive string) (uint64, bool)
 	}
 
+	// An incomplete scan (makemkv.IncompleteScanError) is tried again after
+	// ScanRetryDelay, up to ScanAttempts scans in all: the usual cause is a
+	// drive still spinning up. A damaged disc fails every attempt.
+	ScanAttempts   int
+	ScanRetryDelay time.Duration
+
+	// WaitReady, if set, is called before every scan and returns once the
+	// drive has a readable disc (drive.WaitReady), so a disc still spinning
+	// up isn't scanned. Its error ends the scan.
+	WaitReady func(ctx context.Context, drive string) error
+
+	info func(ctx context.Context, drive string) (*makemkv.Disc, error) // runner.Info; tests replace it
+
 	mu      sync.Mutex
 	scanned map[int64]uint64 // job -> the drive's tray generation at its scan
 }
@@ -33,12 +48,40 @@ type Steps struct {
 var _ jobs.Steps = (*Steps)(nil)
 
 func New(runner *makemkv.Runner, radarr *importer.Radarr) *Steps {
-	return &Steps{runner: runner, radarr: radarr, scanned: map[int64]uint64{}}
+	return &Steps{
+		runner: runner, radarr: radarr, scanned: map[int64]uint64{},
+		ScanAttempts: 3, ScanRetryDelay: 30 * time.Second,
+		info: runner.Info,
+	}
+}
+
+// scanDisc scans the drive, retrying an incomplete scan.
+func (s *Steps) scanDisc(ctx context.Context, drive string) (*makemkv.Disc, error) {
+	for attempt := 1; ; attempt++ {
+		if s.WaitReady != nil {
+			if err := s.WaitReady(ctx, drive); err != nil {
+				return nil, err
+			}
+		}
+		d, err := s.info(ctx, drive)
+		var inc *makemkv.IncompleteScanError
+		if !errors.As(err, &inc) {
+			return d, err
+		}
+		if attempt >= s.ScanAttempts {
+			return nil, fmt.Errorf("after %d scans: %w", attempt, err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(s.ScanRetryDelay):
+		}
+	}
 }
 
 func (s *Steps) Scan(ctx context.Context, j *jobs.Job) (*makemkv.Disc, error) {
 	gen, known := s.trayGeneration(j.Drive)
-	d, err := s.runner.Info(ctx, j.Drive)
+	d, err := s.scanDisc(ctx, j.Drive)
 	if err == nil && known {
 		s.mu.Lock()
 		s.scanned[j.ID] = gen
@@ -63,7 +106,7 @@ func (s *Steps) CheckDisc(ctx context.Context, j *jobs.Job) error {
 	if known && scanned && at == gen {
 		return nil
 	}
-	now, err := s.runner.Info(ctx, j.Drive)
+	now, err := s.scanDisc(ctx, j.Drive)
 	if err != nil {
 		return err
 	}

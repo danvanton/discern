@@ -253,3 +253,91 @@ func TestCheckDiscSkipsTheRescanWhenTheTrayHasNotChanged(t *testing.T) {
 		t.Error("after a tray change CheckDisc must rescan (and here fail, as the scan file is gone)")
 	}
 }
+
+// scans returns an info seam that plays results in order and counts calls.
+func scans(results ...error) (func(context.Context, string) (*makemkv.Disc, error), *int) {
+	calls := 0
+	return func(context.Context, string) (*makemkv.Disc, error) {
+		err := results[min(calls, len(results)-1)]
+		calls++
+		if err != nil {
+			return nil, err
+		}
+		return &makemkv.Disc{Volume: "DISC"}, nil
+	}, &calls
+}
+
+var notReady = &makemkv.IncompleteScanError{ReadErrors: 1204, Skipped: 35, First: "Error 'Scsi error - NOT READY'"}
+
+func TestScanRetriesAnIncompleteScan(t *testing.T) {
+	s := New(nil, nil)
+	s.ScanRetryDelay = time.Millisecond
+	var calls *int
+	s.info, calls = scans(notReady, notReady, nil)
+	d, err := s.Scan(context.Background(), &jobs.Job{Drive: "/dev/sr0"})
+	if err != nil || d == nil || *calls != 3 {
+		t.Fatalf("Scan = %v, %v after %d scans; want the third scan's disc", d, err, *calls)
+	}
+}
+
+func TestScanGivesUpAfterTheLastAttempt(t *testing.T) {
+	s := New(nil, nil)
+	s.ScanRetryDelay = time.Millisecond
+	var calls *int
+	s.info, calls = scans(notReady)
+	_, err := s.Scan(context.Background(), &jobs.Job{Drive: "/dev/sr0"})
+	var inc *makemkv.IncompleteScanError
+	if !errors.As(err, &inc) || *calls != 3 || !strings.Contains(err.Error(), "after 3 scans") {
+		t.Fatalf("err = %v after %d scans; want an IncompleteScanError after 3", err, *calls)
+	}
+}
+
+func TestScanDoesNotRetryOtherErrors(t *testing.T) {
+	s := New(nil, nil)
+	s.ScanRetryDelay = time.Millisecond
+	var calls *int
+	s.info, calls = scans(errors.New("makemkvcon exited with status 1"))
+	if _, err := s.Scan(context.Background(), &jobs.Job{Drive: "/dev/sr0"}); err == nil || *calls != 1 {
+		t.Fatalf("err = %v after %d scans; want the error after 1", err, *calls)
+	}
+}
+
+func TestScanStopsWaitingOnShutdown(t *testing.T) {
+	s := New(nil, nil)
+	s.ScanRetryDelay = time.Hour
+	s.info, _ = scans(notReady)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	if _, err := s.Scan(ctx, &jobs.Job{Drive: "/dev/sr0"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v; want context.Canceled, so the job counts as interrupted", err)
+	}
+}
+
+func TestCheckDiscRetriesAnIncompleteRescan(t *testing.T) {
+	s := New(nil, nil)
+	s.ScanRetryDelay = time.Millisecond
+	var calls *int
+	s.info, calls = scans(notReady, nil)
+	j := &jobs.Job{ID: 9, Drive: "/dev/sr0", Disc: &makemkv.Disc{Volume: "DISC"}}
+	if err := s.CheckDisc(context.Background(), j); err != nil || *calls != 2 {
+		t.Fatalf("CheckDisc = %v after %d scans; want nil after 2", err, *calls)
+	}
+}
+
+func TestScanWaitsForTheDriveBeforeEveryAttempt(t *testing.T) {
+	s := New(nil, nil)
+	s.ScanRetryDelay = time.Millisecond
+	waits := 0
+	s.WaitReady = func(context.Context, string) error { waits++; return nil }
+	s.info, _ = scans(notReady, nil)
+	if _, err := s.Scan(context.Background(), &jobs.Job{Drive: "/dev/sr0"}); err != nil || waits != 2 {
+		t.Fatalf("Scan = %v with %d waits; want nil with one wait per scan (2)", err, waits)
+	}
+
+	s.WaitReady = func(context.Context, string) error { return errors.New("/dev/sr0 has no readable disc (tray open)") }
+	var calls *int
+	s.info, calls = scans(nil)
+	if _, err := s.Scan(context.Background(), &jobs.Job{Drive: "/dev/sr0"}); err == nil || *calls != 0 {
+		t.Fatalf("err = %v after %d scans; want the drive's error and no scan", err, *calls)
+	}
+}

@@ -138,7 +138,19 @@ func (r *Radarr) Import(ctx context.Context, j *jobs.Job, dir string) error {
 
 	switch {
 	case len(files) == 0 && importedForJob(existing, j):
-		return nil // imported before a crash; nothing left to do
+		// Imported before a crash or a failed check. Nothing is left to
+		// move, but a Retry mustn't call an import filed as Unknown done.
+		// Any known quality is accepted: the user may have set a different
+		// one in Radarr on purpose.
+		got, err := fileQuality(existing)
+		if err != nil {
+			return err
+		}
+		if got == "" || got == "Unknown" {
+			return fmt.Errorf("radarr has %s (%d) with quality Unknown: set the quality under Manage Files in Radarr, then retry",
+				existing.Title, existing.Year)
+		}
+		return nil
 	case len(files) == 0 && existing != nil && existing.HasFile:
 		return fmt.Errorf("the rip is missing from %s, and Radarr's file for %s (%d) is older than this job, so it isn't this rip; nothing was changed",
 			dir, existing.Title, existing.Year)
@@ -183,7 +195,10 @@ func (r *Radarr) Import(ctx context.Context, j *jobs.Job, dir string) error {
 			}
 		}
 		entry["movieId"] = movie.ID
-		entry["quality"] = quality
+		entry["quality"] = radarr.QualityModel(quality, entry["quality"])
+		// Radarr guesses a release group from the folder name ("staging");
+		// a rip from a disc has none.
+		entry["releaseGroup"] = ""
 		if _, ok := entry["languages"]; !ok {
 			entry["languages"] = []any{}
 		}
@@ -287,16 +302,27 @@ func (r *Radarr) verify(ctx context.Context, movieID int, staged, qualityName st
 	if err != nil {
 		return err
 	}
-	if !m.HasFile || m.MovieFile == nil {
-		return fmt.Errorf("radarr reported the import complete, but %s (%d) has no file", m.Title, m.Year)
+	got, err := fileQuality(m)
+	if err != nil {
+		return err
 	}
-	if got := m.MovieFile.Quality.Quality.Name; got != qualityName {
-		return fmt.Errorf("radarr filed %s (%d) as %s, expected %s", m.Title, m.Year, got, qualityName)
+	if got != qualityName {
+		return fmt.Errorf("radarr filed %s (%d) as %s, expected %s: set the quality under Manage Files in Radarr, then retry",
+			m.Title, m.Year, got, qualityName)
 	}
 	if _, err := os.Stat(staged); err == nil {
 		return fmt.Errorf("radarr reported the import complete, but %s is still in staging", staged)
 	}
 	return nil
+}
+
+// fileQuality is the quality Radarr filed the movie's file with. A wrong one
+// is not fixed here: the user sets it in Radarr, then retries.
+func fileQuality(m *radarr.Movie) (string, error) {
+	if !m.HasFile || m.MovieFile == nil {
+		return "", fmt.Errorf("radarr reported the import complete, but %s (%d) has no file", m.Title, m.Year)
+	}
+	return m.MovieFile.Quality.Quality.Name, nil
 }
 
 // QualityName is the Radarr quality for the job's rip, from the chosen

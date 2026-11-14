@@ -368,3 +368,66 @@ func TestDebugLogAllowance(t *testing.T) {
 		}
 	}
 }
+
+// TestInfoFailsClosedOnAnIncompleteScan replays the pattern of a real UHD scan
+// made while the drive was spinning up: read errors and skipped titles, then
+// "Operation successfully completed" and exit status 0.
+func TestInfoFailsClosedOnAnIncompleteScan(t *testing.T) {
+	good, err := os.ReadFile(abs(t, "../../testdata/makemkv/info-sample-movie.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	notReady := `MSG:2003,0,3,"Error 'Scsi error - NOT READY:LOGICAL UNIT IS IN PROCESS OF BECOMING READY' occurred while reading '/BDMV/STREAM/00113.m2ts' at offset '10278912'","Error '%1' occurred while reading '%2' at offset '%3'","Scsi error - NOT READY:LOGICAL UNIT IS IN PROCESS OF BECOMING READY","/BDMV/STREAM/00113.m2ts","10278912"` + "\n"
+	for name, extra := range map[string]string{
+		"read errors":   notReady + notReady,
+		"title skipped": `MSG:3016,0,1,"Title #00064.mpls was skipped","Title #%1 was skipped","00064.mpls"` + "\n",
+		"undecodable":   `MSG:5043,0,1,"Failed to decode audio/video data for title #38 - invalid mux or internal error, title skipped.","Failed to decode audio/video data for title #%1 - invalid mux or internal error, title skipped.","38"` + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			scan := filepath.Join(t.TempDir(), "scan.txt")
+			os.WriteFile(scan, append([]byte(extra), good...), 0o644)
+			r := testRunner(t, fake.Scenario{Info: fake.Info{File: scan}})
+			d, err := r.Info(context.Background(), "/dev/sr0")
+			var inc *IncompleteScanError
+			if !errors.As(err, &inc) || d != nil {
+				t.Fatalf("Info = %v, %v; want nil and an *IncompleteScanError", d, err)
+			}
+			if inc.First == "" || !strings.Contains(err.Error(), "couldn't read the whole disc") {
+				t.Errorf("error %q doesn't say what happened", err)
+			}
+		})
+	}
+}
+
+func TestIncompleteScanErrorCountsAndBoundsMessages(t *testing.T) {
+	d := &Disc{Messages: []Message{
+		{Code: 1005, Text: "MakeMKV v2.0.0 started"},
+		{Code: msgReadError, Text: strings.Repeat("x", 500)},
+		{Code: msgReadError, Text: "second"},
+		{Code: msgTitleSkipped, Text: "Title #00064.mpls was skipped"},
+		{Code: 5011, Text: "Operation successfully completed"},
+	}}
+	err := checkComplete(d)
+	var inc *IncompleteScanError
+	if !errors.As(err, &inc) || inc.ReadErrors != 2 || inc.Skipped != 1 {
+		t.Fatalf("checkComplete = %+v; want 2 read errors and 1 skipped", err)
+	}
+	if len([]rune(inc.First)) > 201 {
+		t.Errorf("first message is %d runes; disc text must be bounded", len([]rune(inc.First)))
+	}
+	if !strings.Contains(err.Error(), "2 read errors, 1 title skipped") {
+		t.Errorf("error = %q", err)
+	}
+	if checkComplete(&Disc{Messages: []Message{{Code: 5011}}}) != nil {
+		t.Error("a scan without errors was called incomplete")
+	}
+	// A copy-protected DVD: MakeMKV reads around planted bad sectors and
+	// skips nothing. Those read errors alone don't make the scan incomplete.
+	protected := &Disc{Messages: []Message{
+		{Code: msgReadError, Text: "Error 'Scsi error - MEDIUM ERROR:L-EC UNCORRECTABLE ERROR' occurred while reading '/VIDEO_TS/VTS_03_1.VOB' at offset '1048576'"},
+		{Code: 5011, Text: "Operation successfully completed"},
+	}}
+	if err := checkComplete(protected); err != nil {
+		t.Errorf("read errors without skipped titles or a not-ready drive failed the scan: %v", err)
+	}
+}
