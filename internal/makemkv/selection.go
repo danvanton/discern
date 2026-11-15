@@ -7,16 +7,24 @@ import (
 	"strings"
 )
 
-// DefaultSelection is MakeMKV 2.0.0's own selection rule, from its
-// default.mmcp.xml. Discern leaves it in charge until the user chooses
-// languages (decision D24).
-const DefaultSelection = "-sel:all,+sel:(favlang|nolang|single),-sel:(havemulti|havecore),-sel:mvcvideo,=100:all,-10:favlang"
-
 var langCode = regexp.MustCompile(`^[a-z]{3}$`)
 
 // SelectionRule builds MakeMKV's track selection rule (the
 // app_DefaultSelectionString setting) for a language choice. The grammar is
 // MakeMKV's: comma-separated "action:condition" tokens, applied left to right.
+//
+// Until the user chooses languages, Discern writes no rule and MakeMKV 2.0.0's
+// own applies (decision D24). That one is built into makemkvcon, where its
+// text was read:
+//
+//	-sel:all,+sel:(favlang|nolang),-sel:mvcvideo,=100:all,-10:favlang
+//
+// It is not the rule in MakeMKV's default.mmcp.xml, which adds
+// "-sel:(havemulti|havecore)": MakeMKV ignores a profile's selection. Discern
+// v0.1.3 copied that clause, and a real rip lost its lossless TrueHD 7.1
+// track, keeping only the lossy copy (decision D28).
+//
+// Discern's rule differs from the built-in one in these ways:
 //
 //   - Video is always kept; 3D (mvcvideo) is dropped, as MakeMKV's default does.
 //   - Audio in the chosen languages is kept, and so is audio with no language
@@ -24,9 +32,11 @@ var langCode = regexp.MustCompile(`^[a-z]{3}$`)
 //     has sound.
 //   - Subtitles in the chosen languages are kept, only forced ones if
 //     forcedOnly. No subtitle languages keeps no subtitles.
-//   - Like MakeMKV's default, a stereo track is dropped when a multichannel one
-//     exists in its language, and so is the "havecore" duplicate.
-//   - Commentary and other special tracks are dropped unless commentary.
+//   - No track is dropped for being a duplicate of another, as in MakeMKV's
+//     default: a lossless track and its lossy copy are both kept, and so is a
+//     stereo track beside a surround one.
+//   - Commentary and other special tracks are dropped unless commentary, in
+//     every language. MakeMKV's default keeps them.
 //   - Tracks are ordered by the order of audio: MakeMKV's default lowers the
 //     weight of favourite languages to put them first, so earlier languages
 //     get lower weights. (Inferred from the default rule; check on a rip.)
@@ -53,7 +63,7 @@ func SelectionRule(audio, subtitles []string, forcedOnly, commentary bool) (stri
 		}
 		rule = append(rule, "+sel:("+cond+")")
 	}
-	rule = append(rule, "-sel:(havemulti|havecore)", "-sel:mvcvideo")
+	rule = append(rule, "-sel:mvcvideo")
 	if !commentary {
 		rule = append(rule, "-sel:special")
 	}

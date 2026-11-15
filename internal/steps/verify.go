@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/lang"
 	"github.com/danvanton/discern/internal/makemkv"
 )
 
@@ -30,8 +32,9 @@ const (
 
 // Verify checks the rip before anything is imported: one file per chosen
 // title, each a plausible size for that title, and, where mkvmerge is
-// available (Steps.Tracks), a Matroska file with video and with audio if the
-// title has any. It reads only, so it is safe to run again.
+// available (Steps.Tracks), a Matroska file with video, with audio if the
+// title has any, and with each kept language's lossless track if the title
+// has one. It reads only, so it is safe to run again.
 func (s *Steps) Verify(ctx context.Context, j *jobs.Job, dir string) error {
 	floor := minSizeRatio
 	if s.Trimmed != nil {
@@ -100,8 +103,40 @@ func verifyDir(ctx context.Context, j *jobs.Job, dir string, floor float64, trac
 			return fmt.Errorf("%s has no audio track, though title %d has audio on the disc: check the languages in Settings",
 				filepath.Base(path), idx)
 		}
+		if l := lostLossless(t, got); l != "" {
+			return fmt.Errorf("%s kept %s audio but not its lossless track, which title %d has on the disc: the track selection dropped it",
+				filepath.Base(path), languageName(l), idx)
+		}
 	}
 	return nil
+}
+
+// lostLossless returns a language whose lossless audio the rip lost: the
+// scan's title has a lossless track in it, and the file has audio in that
+// language, but none lossless. A language the file has no audio in at all
+// was left out on purpose. v0.1.3 lost Star Trek III's TrueHD 7.1 this way,
+// keeping only the AC-3 copy, and its Verify passed.
+func lostLossless(t makemkv.Title, got FileTracks) string {
+	for _, s := range t.Streams {
+		code := lang.Canonical(s.Lang)
+		if s.Type != "Audio" || lang.None(code) {
+			continue
+		}
+		if !lossless(s.Codec) && !lossless(s.Attrs[makemkv.AttrCodecLong]) {
+			continue
+		}
+		if slices.Contains(got.AudioLanguages, code) && !slices.Contains(got.LosslessLanguages, code) {
+			return code
+		}
+	}
+	return ""
+}
+
+func languageName(code string) string {
+	if name := lang.Name(code); name != "" {
+		return name
+	}
+	return code
 }
 
 func hasAudio(t makemkv.Title) bool {

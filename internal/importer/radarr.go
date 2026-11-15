@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/danvanton/discern/internal/identify"
 	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/lang"
 	"github.com/danvanton/discern/internal/radarr"
 )
 
@@ -40,6 +42,14 @@ type RadarrConfig struct {
 type Radarr struct {
 	client *radarr.Client
 	cfg    RadarrConfig
+
+	// AudioLanguages, if set, reads the audio languages of a ripped file, as
+	// lang.Canonical codes (main sets it to the mkvmerge reader). Import then
+	// tells Radarr the file's languages, which Radarr can't work out from a
+	// rip's name and files as "Unknown".
+	AudioLanguages func(ctx context.Context, file string) ([]string, error)
+	// Log, if set, is told about languages Radarr doesn't list.
+	Log *slog.Logger
 }
 
 func NewRadarr(client *radarr.Client, cfg RadarrConfig) (*Radarr, error) {
@@ -216,6 +226,13 @@ func (r *Radarr) Import(ctx context.Context, j *jobs.Job, dir string) error {
 	}
 	movie := existing
 	if cmdID == 0 {
+		// The file's languages are read before the movie is added too, for
+		// the same reason as the scan. They are only needed to start an
+		// import: one that is already running may move the file any moment.
+		langs, err := r.fileLanguages(ctx, file)
+		if err != nil {
+			return err
+		}
 		if movie == nil {
 			if movie, err = r.addMovie(ctx, j.Movie); err != nil {
 				return err
@@ -228,6 +245,9 @@ func (r *Radarr) Import(ctx context.Context, j *jobs.Job, dir string) error {
 		entry["releaseGroup"] = ""
 		if _, ok := entry["languages"]; !ok {
 			entry["languages"] = []any{}
+		}
+		if len(langs) > 0 {
+			entry["languages"] = langs
 		}
 		cmd, err := r.client.StartManualImport(ctx, []map[string]any{entry})
 		if err != nil {
@@ -341,6 +361,45 @@ func (r *Radarr) verify(ctx context.Context, movieID int, staged, qualityName st
 		return fmt.Errorf("radarr reported the import complete, but %s is still in staging", staged)
 	}
 	return nil
+}
+
+// fileLanguages returns the file's audio languages as Radarr's own language
+// objects, matched by name, each once. A language Discern can't name or
+// Radarr doesn't list is left out and logged, so a gap shows up in the log
+// instead of as a silent "Unknown". With none, Import leaves the languages
+// Radarr's scan gave.
+func (r *Radarr) fileLanguages(ctx context.Context, file string) ([]radarr.Language, error) {
+	if r.AudioLanguages == nil {
+		return nil, nil
+	}
+	codes, err := r.AudioLanguages(ctx, file)
+	if err != nil {
+		return nil, fmt.Errorf("reading the languages of %s: %w", filepath.Base(file), err)
+	}
+	if len(codes) == 0 {
+		return nil, nil
+	}
+	known, err := r.client.Languages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []radarr.Language
+	var unmatched []string
+	for _, code := range codes {
+		name := lang.Name(code)
+		i := slices.IndexFunc(known, func(l radarr.Language) bool { return name != "" && strings.EqualFold(l.Name, name) })
+		switch {
+		case i < 0:
+			unmatched = append(unmatched, code)
+		case !slices.Contains(out, known[i]):
+			out = append(out, known[i])
+		}
+	}
+	if len(unmatched) > 0 && r.Log != nil {
+		r.Log.Warn("radarr was not told about some of the file's audio languages: it doesn't list them",
+			"file", filepath.Base(file), "codes", unmatched)
+	}
+	return out, nil
 }
 
 // fileQuality is the quality Radarr filed the movie's file with. A wrong one

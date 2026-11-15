@@ -3,6 +3,8 @@ package importer
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -354,6 +356,22 @@ func TestRetryJoinsTheRunningImport(t *testing.T) {
 	}
 }
 
+// Joining a running import needs no languages, so a file that can't be read
+// for them (Radarr may be moving it) doesn't fail the retry.
+func TestRetryJoinsTheRunningImportWithoutReadingLanguages(t *testing.T) {
+	s := newSetup(t)
+	s.fake.AddLibraryMovie(603, "The Matrix", 1999, false)
+	s.fake.RunningImport("/data/staging/42/The Matrix_t00.mkv", 1)
+	read := 0
+	s.imp.AudioLanguages = func(context.Context, string) ([]string, error) {
+		read++
+		return nil, errors.New("the file is gone")
+	}
+	if err := s.imp.Import(ctx, s.job, s.staging); err != nil || read != 0 {
+		t.Errorf("err = %v after %d language reads; want the running import joined and no read", err, read)
+	}
+}
+
 func TestIdentifyLabelsThatSayNothing(t *testing.T) {
 	s := newSetup(t)
 	s.fake.SetLookup(map[string]any{"tmdbId": 9, "title": "Video", "year": 2001})
@@ -509,5 +527,46 @@ func TestIdentifyTriesTheLabelWhenTheNameSearchFails(t *testing.T) {
 	s.job.Disc.Volume, s.job.Disc.Name = "STAR_TREK_II_TWOK", "Star Trek II: The Wrath of Khan"
 	if m, err := s.imp.Identify(ctx, s.job); err == nil || m != nil {
 		t.Errorf("got %+v, %v; want the failed search's error when nothing fits", m, err)
+	}
+}
+
+// Import tells Radarr the file's audio languages, as Radarr's own language
+// objects, each once. A language Radarr doesn't list is left out and logged.
+func TestImportSendsTheFilesAudioLanguages(t *testing.T) {
+	s := newSetup(t)
+	var logged strings.Builder
+	s.imp.Log = slog.New(slog.NewTextHandler(&logged, nil))
+	s.imp.AudioLanguages = func(context.Context, string) ([]string, error) {
+		// Thai isn't in the fake Radarr's list. Bengali isn't on the Settings
+		// page, but Discern can name it. nob and nor are both Norwegian.
+		return []string{"eng", "ger", "tha", "ben", "nob", "nor"}, nil
+	}
+	if err := s.imp.Import(ctx, s.job, s.staging); err != nil {
+		t.Fatal(err)
+	}
+	file := s.fake.Imports()[0]["files"].([]any)[0].(map[string]any)
+	langs, _ := file["languages"].([]any)
+	var names []string
+	for _, l := range langs {
+		m, _ := l.(map[string]any)
+		names = append(names, fmt.Sprint(m["id"], "=", m["name"]))
+	}
+	if got, want := strings.Join(names, ","), "1=English,4=German,34=Bengali,15=Norwegian"; got != want {
+		t.Errorf("languages sent = %s; want %s", got, want)
+	}
+	if !strings.Contains(logged.String(), "tha") || strings.Contains(logged.String(), "ben") {
+		t.Errorf("log = %q; want the language Radarr doesn't list (tha), and only that", logged.String())
+	}
+}
+
+// A file whose languages can't be read is not imported with a guess, and
+// nothing has been added to Radarr by then.
+func TestImportFailsWhenTheLanguagesCantBeRead(t *testing.T) {
+	s := newSetup(t)
+	s.imp.AudioLanguages = func(context.Context, string) ([]string, error) { return nil, errors.New("mkvmerge couldn't read it") }
+	err := s.imp.Import(ctx, s.job, s.staging)
+	if err == nil || len(s.fake.Imports()) != 0 || len(s.fake.Added()) != 0 {
+		t.Errorf("err = %v with %d imports and %d movies added; want an error and nothing sent or added",
+			err, len(s.fake.Imports()), len(s.fake.Added()))
 	}
 }

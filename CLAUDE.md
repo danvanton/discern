@@ -2,7 +2,7 @@
 
 Discern watches optical drives, works out which titles on a disc are the movie, rips them with MakeMKV (`makemkvcon`, run as a subprocess) and imports them into Radarr. It is written in Go 1.27 and is a single binary with a web UI.
 
-The design, every decision (D1–D13) and the reason for each are in `docs/DESIGN.md`. Read the relevant section before changing a part. When a change alters behaviour the design describes, update the design doc in the same change. New decisions get the next D-number in the decision log (section 17), marked Proposed until the owner accepts them.
+The design, every decision (D1–D28) and the reason for each are in `docs/DESIGN.md`. Read the relevant section before changing a part. When a change alters behaviour the design describes, update the design doc in the same change. New decisions get the next D-number in the decision log (section 17), marked Proposed until the owner accepts them.
 
 ## Layout
 
@@ -24,6 +24,7 @@ The design, every decision (D1–D13) and the reason for each are in `docs/DESIG
 | `internal/config` | settings from `DISCERN_*` environment variables |
 | `internal/web` | server-rendered UI (`html/template` + vendored htmx), Basic auth, health endpoints |
 | `internal/format` | shared size and length formatting |
+| `internal/lang` | language codes and names; `Canonical` turns ISO 639-2/T codes (`fra`) into /B (`fre`) |
 | `internal/settings` | the Settings page's values (eject, languages); stored by `internal/store` |
 | `testdata/makemkv` | robot-output scans used by tests and the demo |
 | `Dockerfile`, `deploy/` | the image, and the compose example with its notes |

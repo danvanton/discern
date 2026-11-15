@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -377,6 +378,9 @@ func TestVerifyAllowsSmallerFilesWhenLanguagesTrimThem(t *testing.T) {
 // that has audio, is not imported.
 func TestVerifyChecksTheFilesTracks(t *testing.T) {
 	audio := []makemkv.Stream{{Type: "Video"}, {Type: "Audio", Lang: "jpn"}}
+	startrek3 := []makemkv.Stream{{Type: "Video"},
+		{Type: "Audio", Lang: "eng", Codec: "TrueHD"}, {Type: "Audio", Lang: "eng", Codec: "AC3"},
+		{Type: "Audio", Lang: "deu", Codec: "TrueHD"}, {Type: "Audio", Lang: "deu", Codec: "AC3"}}
 	for name, c := range map[string]struct {
 		streams []makemkv.Stream
 		got     FileTracks
@@ -388,6 +392,17 @@ func TestVerifyChecksTheFilesTracks(t *testing.T) {
 		"title without audio":          {[]makemkv.Stream{{Type: "Video"}}, FileTracks{Video: 1}, nil, ""},
 		"no video":                     {audio, FileTracks{Audio: 1}, nil, "has no video track"},
 		"not a file mkvmerge can read": {audio, FileTracks{}, errors.New("mkvmerge doesn't recognise it"), "doesn't recognise"},
+		// Star Trek III, v0.1.3: TrueHD 7.1 and its AC-3 copy on the disc,
+		// only the copy in the file.
+		"lossless track lost": {startrek3, FileTracks{Video: 1, Audio: 1, AudioLanguages: []string{"eng"}}, nil,
+			"kept English audio but not its lossless track"},
+		"lossless track kept": {startrek3, FileTracks{Video: 1, Audio: 2, AudioLanguages: []string{"eng"}, LosslessLanguages: []string{"eng"}}, nil, ""},
+		// German was left out on purpose: its lossless track isn't missed.
+		"language left out": {startrek3, FileTracks{Video: 1, Audio: 2, AudioLanguages: []string{"eng"}, LosslessLanguages: []string{"eng"}}, nil, ""},
+		// The scan's long codec name is enough to know.
+		"lossless by long name": {[]makemkv.Stream{{Type: "Video"}, {Type: "Audio", Lang: "fra", Codec: "DTS-HD",
+			Attrs: map[makemkv.Attr]string{makemkv.AttrCodecLong: "DTS-HD Master Audio"}}},
+			FileTracks{Video: 1, Audio: 1, AudioLanguages: []string{"fre"}}, nil, "kept French audio but not its lossless track"},
 	} {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, "Movie_t00.mkv"), 950)
@@ -402,14 +417,24 @@ func TestVerifyChecksTheFilesTracks(t *testing.T) {
 }
 
 func TestParseIdentification(t *testing.T) {
-	// The shape of "mkvmerge -J" output, cut down to what Discern reads.
-	out := `{"container":{"recognized":true,"supported":true,"type":"Matroska"},"errors":[],"tracks":[
-		{"codec":"HEVC/H.265/MPEG-H","id":0,"type":"video"},
-		{"codec":"TrueHD Atmos","id":1,"type":"audio"},{"codec":"AC-3","id":2,"type":"audio"},
-		{"codec":"HDMV PGS","id":3,"type":"subtitles"}],"warnings":[]}`
+	// "mkvmerge -J" output as a real rip gave it on the homelab (Star Trek
+	// II, MKVToolNix in the v0.1.3 image), cut down to what Discern reads.
+	// The file carries ISO 639-2/B codes: "ger", "fre".
+	out := `{"attachments":[],"chapters":[],"container":{"recognized":true,"supported":true,"type":"Matroska"},"errors":[],
+		"identification_format_version":20,"tracks":[
+		{"codec":"HEVC/H.265/MPEG-H","id":0,"properties":{"language":"eng"},"type":"video"},
+		{"codec":"TrueHD","id":1,"properties":{"language":"eng","default_track":true},"type":"audio"},
+		{"codec":"AC-3 Dolby Surround EX","id":2,"properties":{"language":"eng"},"type":"audio"},
+		{"codec":"TrueHD","id":3,"properties":{"language":"ger"},"type":"audio"},
+		{"codec":"AC-3","id":6,"properties":{"language":"fre"},"type":"audio"},
+		{"codec":"AC-3","id":7,"properties":{"language":"und"},"type":"audio"},
+		{"codec":"TrueHD","id":8,"properties":{"language":"und"},"type":"audio"},
+		{"codec":"HDMV PGS","id":9,"properties":{"language":"eng"},"type":"subtitles"}],"warnings":[]}`
 	got, err := parseIdentification([]byte(out))
-	if err != nil || got != (FileTracks{Video: 1, Audio: 2, Subtitles: 1}) {
-		t.Errorf("parseIdentification = %+v, %v", got, err)
+	want := FileTracks{Video: 1, Audio: 6, Subtitles: 1, AudioLanguages: []string{"eng", "ger", "fre"},
+		LosslessLanguages: []string{"eng", "ger"}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("parseIdentification = %+v, %v; want %+v", got, err, want)
 	}
 	for name, bad := range map[string]string{
 		"not recognised": `{"container":{"recognized":false,"supported":false},"tracks":[]}`,
@@ -418,6 +443,115 @@ func TestParseIdentification(t *testing.T) {
 	} {
 		if _, err := parseIdentification([]byte(bad)); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// Verify and Import read the same rip one after the other; mkvmerge runs once.
+func TestRememberedReadsAnUnchangedFileOnce(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "Movie_t00.mkv")
+	writeFile(t, file, 100)
+	calls, fail := 0, false
+	read := Remembered(func(context.Context, string) (FileTracks, error) {
+		calls++
+		if fail {
+			return FileTracks{}, errors.New("mkvmerge couldn't read it")
+		}
+		return FileTracks{Video: 1, Audio: calls}, nil
+	})
+	ctx := context.Background()
+	first, _ := read(ctx, file)
+	second, err := read(ctx, file)
+	if err != nil || calls != 1 || !reflect.DeepEqual(first, second) {
+		t.Fatalf("two reads of one file: %d calls, %+v then %+v, %v; want 1 call and the same answer", calls, first, second, err)
+	}
+
+	writeFile(t, file, 200) // the file changed: read it again
+	if third, _ := read(ctx, file); calls != 2 || third.Audio != 2 {
+		t.Errorf("after the file changed: %d calls, %+v; want a fresh read", calls, third)
+	}
+
+	// A failed read isn't remembered as the answer.
+	writeFile(t, file, 300)
+	fail = true
+	if _, err := read(ctx, file); err == nil {
+		t.Error("a failed read returned no error")
+	}
+	fail = false
+	if _, err := read(ctx, file); err != nil || calls != 4 {
+		t.Errorf("after a failed read: err %v, %d calls; want a fresh, good read", err, calls)
+	}
+	if _, err := read(ctx, filepath.Join(t.TempDir(), "missing.mkv")); err == nil {
+		t.Error("a missing file returned no error")
+	}
+}
+
+// A caller that changes the languages it was given doesn't change what the
+// next caller gets.
+func TestRememberedGivesEachCallerItsOwnCopy(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "Movie_t00.mkv")
+	writeFile(t, file, 100)
+	read := Remembered(func(context.Context, string) (FileTracks, error) {
+		return FileTracks{Video: 1, Audio: 2, AudioLanguages: []string{"eng", "ger"}, LosslessLanguages: []string{"eng"}}, nil
+	})
+	ctx := context.Background()
+	first, _ := read(ctx, file)
+	first.AudioLanguages[0], first.LosslessLanguages[0] = "xxx", "xxx"
+	second, _ := read(ctx, file)
+	second.AudioLanguages[1] = "yyy"
+	third, _ := read(ctx, file)
+	if !reflect.DeepEqual(third.AudioLanguages, []string{"eng", "ger"}) || !reflect.DeepEqual(third.LosslessLanguages, []string{"eng"}) {
+		t.Errorf("after callers changed their copies: %+v; want the file's own languages", third)
+	}
+}
+
+// A read doesn't hold up another: Remembered's lock isn't held while
+// mkvmerge runs.
+func TestRememberedDoesntBlockOnASlowRead(t *testing.T) {
+	dir := t.TempDir()
+	slow, quick := filepath.Join(dir, "slow.mkv"), filepath.Join(dir, "quick.mkv")
+	writeFile(t, slow, 100)
+	writeFile(t, quick, 100)
+	release := make(chan struct{})
+	read := Remembered(func(ctx context.Context, file string) (FileTracks, error) {
+		if file == slow {
+			<-release
+		}
+		return FileTracks{Video: 1}, nil
+	})
+	done := make(chan struct{})
+	go func() {
+		read(context.Background(), slow)
+		close(done)
+	}()
+	time.Sleep(20 * time.Millisecond) // let the slow read start
+	got := make(chan error, 1)
+	go func() {
+		_, err := read(context.Background(), quick)
+		got <- err
+	}()
+	select {
+	case err := <-got:
+		if err != nil {
+			t.Errorf("the quick read: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("the quick read waited for the slow one")
+	}
+	close(release)
+	<-done
+}
+
+func TestLossless(t *testing.T) {
+	for codec, want := range map[string]bool{
+		// MakeMKV's scan (short and long names) and mkvmerge's names.
+		"TrueHD": true, "TrueHD Atmos": true, "DTS-HD MA": true, "DTS-HD Master Audio": true,
+		"LPCM": true, "PCM": true, "FLAC": true,
+		"AC3": false, "AC-3 Dolby Surround EX": false, "E-AC3": false, "DTS": false,
+		"DTS-HD HR": false, "DTS-HD High Resolution Audio": false, "AAC": false, "": false,
+	} {
+		if lossless(codec) != want {
+			t.Errorf("lossless(%q) = %v; want %v", codec, !want, want)
 		}
 	}
 }

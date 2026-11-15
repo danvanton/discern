@@ -370,3 +370,51 @@ func TestSaveSettingsRefusesBadLanguages(t *testing.T) {
 		t.Fatal("languages without audio were saved")
 	}
 }
+
+// The scan and the Settings page use different codes for the same language:
+// a real UHD scan says "deu", "fra" where the page stores "ger", "fre".
+// (Star Trek III's main title, job 6 on the homelab.)
+func TestOwnAudioComparesBothCodeForms(t *testing.T) {
+	var streams []makemkv.Stream
+	for _, l := range []string{"eng", "eng", "deu", "deu", "spa", "fra", "jpn"} {
+		streams = append(streams, makemkv.Stream{Type: "Audio", Lang: l})
+	}
+	j := &jobs.Job{Titles: []int{29}, Disc: &makemkv.Disc{Titles: []makemkv.Title{{Index: 29, Streams: streams}}}}
+	for _, chosen := range [][]string{{"ger"}, {"fre"}, {"eng"}, {"fre", "ger"}} {
+		if own := ownAudio(j, chosen); len(own) != 0 {
+			t.Errorf("chosen %v: the title was treated as foreign, keeping %v; it has audio in a chosen language", chosen, own)
+		}
+	}
+	// A language the title really lacks: its own are kept, each once, in /B form.
+	if own := ownAudio(j, []string{"ita"}); strings.Join(own, ",") != "eng,ger,spa,fre,jpn" {
+		t.Errorf("chosen ita: own audio = %v; want eng,ger,spa,fre,jpn", own)
+	}
+}
+
+// "und" is audio without a language, like an empty code: the title isn't
+// foreign, and "und" never goes into the rule.
+func TestOwnAudioCountsUndAsNoLanguage(t *testing.T) {
+	streams := []makemkv.Stream{{Type: "Audio", Lang: "und"}, {Type: "Audio", Lang: "jpn"}}
+	j := &jobs.Job{Titles: []int{0}, Disc: &makemkv.Disc{Titles: []makemkv.Title{{Index: 0, Streams: streams}}}}
+	if own := ownAudio(j, []string{"eng"}); len(own) != 0 {
+		t.Errorf("own audio = %v; want none: the und track is kept by nolang", own)
+	}
+	j.Disc.Titles[0].Streams = []makemkv.Stream{{Type: "Audio", Lang: "UND"}}
+	if own := ownAudio(j, []string{"eng"}); len(own) != 0 {
+		t.Errorf("own audio = %v; want none", own)
+	}
+}
+
+// A code from the disc that isn't three letters is left out, so one odd code
+// doesn't make MakeMKV's rule invalid and fail the rip.
+func TestOwnAudioSkipsOddCodes(t *testing.T) {
+	streams := []makemkv.Stream{{Type: "Audio", Lang: "jpn"}, {Type: "Audio", Lang: "en"}, {Type: "Audio", Lang: "j,p"}}
+	j := &jobs.Job{Titles: []int{0}, Disc: &makemkv.Disc{Titles: []makemkv.Title{{Index: 0, Streams: streams}}}}
+	own := ownAudio(j, []string{"eng"})
+	if strings.Join(own, ",") != "jpn" {
+		t.Fatalf("own audio = %v; want only jpn", own)
+	}
+	if _, err := makemkv.SelectionRule(append([]string{"eng"}, own...), nil, false, false); err != nil {
+		t.Errorf("the rule for this title is refused: %v", err)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -479,8 +480,9 @@ func TestSettingsPage(t *testing.T) {
 		t.Error("the page doesn't show the saved preferred language")
 	}
 
-	// Languages ticked with MakeMKV's default on aren't saved, and the page
-	// says so.
+	// With MakeMKV's default on, the page disables the language choices, so
+	// they aren't sent. A browser that sends them anyway (the script didn't
+	// run) gets the default saved, and the page says the ticks weren't.
 	form = url.Values{"languages": {"default"}, "audio": {"eng"}}
 	resp, _ = do(t, srv, "POST", "/settings", form, true, same)
 	if loc := resp.Header.Get("Location"); resp.StatusCode != 303 || loc != "/settings?saved=ignored" || b.settings.Languages != nil {
@@ -488,6 +490,20 @@ func TestSettingsPage(t *testing.T) {
 	}
 	if _, body := do(t, srv, "GET", "/settings?saved=ignored", nil, true, nil); !strings.Contains(body, "the ticked languages were not saved") {
 		t.Error("the page doesn't say the ticked languages were ignored")
+	}
+	form = url.Values{"languages": {"default"}}
+	if resp, _ = do(t, srv, "POST", "/settings", form, true, same); resp.Header.Get("Location") != "/settings?saved=1" {
+		t.Errorf("default with nothing ticked: to %q; want the ordinary notice", resp.Header.Get("Location"))
+	}
+
+	// The script that disables the group is a file of Discern's own: the
+	// Content-Security-Policy allows no inline script.
+	_, page := do(t, srv, "GET", "/settings", nil, true, nil)
+	if !strings.Contains(page, `<script src="/static/settings.js" defer></script>`) || !strings.Contains(page, `<fieldset class="chosen-only" id="chosen-languages">`) {
+		t.Error("the page doesn't load settings.js or has no group for it to disable")
+	}
+	if resp, js := do(t, srv, "GET", "/static/settings.js", nil, true, nil); resp.StatusCode != 200 || !strings.Contains(js, "chosen-languages") {
+		t.Errorf("/static/settings.js: %d", resp.StatusCode)
 	}
 
 	// Like every change, a cross-site POST is refused.
@@ -509,5 +525,31 @@ func TestSettingsPageOpensWhenTheSettingsCantBeRead(t *testing.T) {
 	b.settingsErr = nil
 	if resp, _ := do(t, srv, "POST", "/settings", url.Values{"languages": {"default"}}, true, map[string]string{"Origin": srv.URL}); resp.StatusCode != 303 || b.settings == nil {
 		t.Errorf("saving over them: %d", resp.StatusCode)
+	}
+}
+
+// The title list names the audio languages, each once, whichever code form
+// the scan used; a code Discern can't name is shown as it is.
+func TestAudioNamesTheLanguages(t *testing.T) {
+	audio := funcs["audio"].(func(makemkv.Title) string)
+	var streams []makemkv.Stream
+	for _, l := range []string{"eng", "deu", "ger", "fra", "und", "", "qaa"} {
+		streams = append(streams, makemkv.Stream{Type: "Audio", Lang: l})
+	}
+	streams = append(streams, makemkv.Stream{Type: "Subtitles", Lang: "spa"})
+	if got, want := audio(makemkv.Title{Streams: streams}), "English, German, French, qaa"; got != want {
+		t.Errorf("audio = %q; want %q", got, want)
+	}
+}
+
+// The engine says only that the job has no movie; the page, where the form
+// is, says how to choose one.
+func TestApproveWithoutAMovieSaysHowToChooseOne(t *testing.T) {
+	b := newBackend()
+	b.failNext = fmt.Errorf("approving: %w", jobs.ErrNoMovie)
+	srv := newServer(t, b)
+	resp, body := do(t, srv, "POST", "/jobs/1/approve", url.Values{"title": {"0"}}, true, map[string]string{"Origin": srv.URL})
+	if resp.StatusCode != 422 || !strings.Contains(body, "type its TMDb id in the box above the titles") {
+		t.Errorf("approve without a movie: %d; want 422 and how to choose the movie", resp.StatusCode)
 	}
 }

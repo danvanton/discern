@@ -82,6 +82,16 @@ func New(apiKey, local, remote, library string) *Server {
 	mux.HandleFunc("POST /api/v3/movie", s.addMovie)
 	mux.HandleFunc("GET /api/v3/movie/lookup", s.doLookup)
 	mux.HandleFunc("GET /api/v3/movie/lookup/tmdb", s.lookupTMDb)
+	mux.HandleFunc("GET /api/v3/language", func(w http.ResponseWriter, _ *http.Request) {
+		// Part of Radarr's own list (src/NzbDrone.Core/Languages/Language.cs
+		// at v6.4.4.10685). It has no Malay or Thai entry here on purpose: the
+		// real list lacks Malay, and a test needs a language it doesn't list.
+		writeJSON(w, []map[string]any{
+			{"id": 0, "name": "Unknown"}, {"id": 1, "name": "English"}, {"id": 2, "name": "French"},
+			{"id": 4, "name": "German"}, {"id": 8, "name": "Japanese"}, {"id": 10, "name": "Chinese"},
+			{"id": 15, "name": "Norwegian"}, {"id": 34, "name": "Bengali"},
+		})
+	})
 	mux.HandleFunc("GET /api/v3/qualityprofile", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, []map[string]any{{"id": 1, "name": "HD-1080p"}, {"id": 4, "name": "Any"}})
 	})
@@ -425,7 +435,8 @@ func (s *Server) runImport(body map[string]any) {
 			m["movieFile"] = map[string]any{"relativePath": path.Base(dst),
 				"dateAdded":    time.Now().UTC().Format(time.RFC3339Nano),
 				"quality":      qualityModel(name),
-				"releaseGroup": group}
+				"releaseGroup": group,
+				"languages":    file["languages"]}
 		}
 	}
 }

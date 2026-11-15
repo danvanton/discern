@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/lang"
 	"github.com/danvanton/discern/internal/makemkv"
 	"github.com/danvanton/discern/internal/makemkv/install"
 )
@@ -61,8 +62,12 @@ func (a *App) LanguagesChosen(ctx context.Context) (bool, error) {
 }
 
 // ownAudio returns the audio languages of the job's chosen titles that have
-// audio, but none in the chosen languages and none without a language. The
-// codes come from the disc; SelectionRule checks them before they are used.
+// audio, but none in the chosen languages and none without a language ("und"
+// counts as none: the rule's "nolang" keeps those tracks, and "und" is not a
+// language to put into the rule). Codes are compared in their canonical form:
+// a scan says "fra" where the Settings page says "fre". They come from the
+// disc, so a code that isn't three letters is left out rather than passed on:
+// one odd code must not fail the rule for the whole rip.
 func ownAudio(j *jobs.Job, chosen []string) []string {
 	if j.Disc == nil {
 		return nil
@@ -78,10 +83,13 @@ func ownAudio(j *jobs.Job, chosen []string) []string {
 			if s.Type != "Audio" {
 				continue
 			}
-			if s.Lang == "" || slices.Contains(chosen, s.Lang) {
+			code := lang.Canonical(s.Lang)
+			if lang.None(code) || slices.Contains(chosen, code) {
 				kept = true
 			}
-			langs = append(langs, s.Lang)
+			if lang.WellFormed(code) && !lang.None(code) {
+				langs = append(langs, code)
+			}
 		}
 		if kept {
 			continue

@@ -9,6 +9,7 @@ import (
 
 	"github.com/danvanton/discern/internal/format"
 	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/lang"
 	"github.com/danvanton/discern/internal/makemkv"
 )
 
@@ -34,10 +35,21 @@ var funcs = template.FuncMap{
 		return ""
 	},
 	"audio": func(t makemkv.Title) string {
+		// By name, each language once: a scan says "deu" or "fra" where the
+		// Settings page says German or French. A code Discern can't name is
+		// shown as it is.
 		var langs []string
 		for _, s := range t.Streams {
-			if s.Type == "Audio" && s.Lang != "" && !slices.Contains(langs, s.Lang) {
-				langs = append(langs, s.Lang)
+			code := lang.Canonical(s.Lang)
+			if s.Type != "Audio" || lang.None(code) {
+				continue
+			}
+			name := lang.Name(code)
+			if name == "" {
+				name = code
+			}
+			if !slices.Contains(langs, name) {
+				langs = append(langs, name)
 			}
 		}
 		return strings.Join(langs, ", ")

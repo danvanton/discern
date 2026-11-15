@@ -195,9 +195,17 @@ func run(log *slog.Logger) error {
 	jobSteps.Trimmed = a.LanguagesChosen
 	// Verify reads each rip's tracks with mkvmerge, which the image has.
 	if bin, err := exec.LookPath("mkvmerge"); err == nil {
-		jobSteps.Tracks = steps.Mkvmerge(bin)
+		// One read serves both: Verify checks the tracks, and the import
+		// tells Radarr the file's audio languages.
+		tracks := steps.Remembered(steps.Mkvmerge(bin))
+		jobSteps.Tracks = tracks
+		imp.Log = log
+		imp.AudioLanguages = func(ctx context.Context, file string) ([]string, error) {
+			t, err := tracks(ctx, file)
+			return t.AudioLanguages, err
+		}
 	} else {
-		log.Warn("mkvmerge not found: rips are checked by size only, not for missing audio")
+		log.Warn("mkvmerge not found: rips are checked by size only, not for missing audio, and Radarr isn't told their languages")
 	}
 	if err := a.Resume(ctx); err != nil {
 		return fmt.Errorf("resuming jobs: %w", err)

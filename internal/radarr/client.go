@@ -395,3 +395,16 @@ func (c *Client) WaitForCommand(ctx context.Context, id int, every time.Duration
 		}
 	}
 }
+
+// Language is one of Radarr's languages, as a movie file lists them.
+type Language struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// Languages returns the languages Radarr knows.
+func (c *Client) Languages(ctx context.Context) ([]Language, error) {
+	var out []Language
+	err := c.do(ctx, http.MethodGet, "/language", nil, nil, &out)
+	return out, err
+}

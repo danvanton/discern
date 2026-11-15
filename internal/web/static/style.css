@@ -163,4 +163,10 @@ form.panel button.primary { margin-top: 1rem; }
 .langs { display: flex; flex-wrap: wrap; gap: 0.35rem 1.1rem; margin: 0.4rem 0; }
 .langs label { white-space: nowrap; }
 .settings input[type="checkbox"], .settings input[type="radio"] { padding: 0; }
+/* The language choices do nothing while MakeMKV's default selection is on.
+   settings.js disables the whole group then; these rules dim it, and stand
+   in (dimmed, no clicks) if the script didn't run. */
+.settings fieldset.chosen-only { border: 0; margin: 0; padding: 0; min-width: 0; }
+.settings fieldset.chosen-only:disabled,
+.settings:has(input[name="languages"][value="default"]:checked) .chosen-only { opacity: 0.4; pointer-events: none; }
 p.saved { border-left: 3px solid var(--good, var(--accent)); padding-left: 0.6rem; }

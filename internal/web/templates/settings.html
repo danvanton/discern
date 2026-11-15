@@ -18,6 +18,7 @@
     <p><label><input type="radio" name="languages" value="chosen" {{if .Settings.Languages}}checked{{end}}> Only the languages chosen below</label></p>
   </fieldset>
 
+  <fieldset class="chosen-only" id="chosen-languages">
   <fieldset>
     <legend>Audio</legend>
     <div class="langs">
@@ -46,7 +47,9 @@
   </fieldset>
 
   <p><label><input type="checkbox" name="commentary" value="on" {{if .Commentary}}checked{{end}}> Keep commentary tracks</label></p>
+  </fieldset>
 
   <button type="submit" class="primary">Save</button>
 </form>
+<script src="/static/settings.js" defer></script>
 {{end}}

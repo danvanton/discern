@@ -254,7 +254,7 @@ func (e *Engine) Approve(ctx context.Context, id int64, titles []int, movie *Mov
 		j.Movie = movie
 	}
 	if j.Movie == nil {
-		return errors.New("choose the movie first: the import needs to know which one it is")
+		return ErrNoMovie
 	}
 	j.Titles, j.Note = slices.Clone(titles), ""
 	return e.move(ctx, j, Ripping, fmt.Sprintf("approved titles %v", titles))

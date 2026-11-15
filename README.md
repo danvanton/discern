@@ -1,4 +1,4 @@
-# Discern
+# DISCERN
 
 **D**isc **I**dentification, **S**election, **C**apture, **E**xtraction, **R**ipping and **N**aming.
 

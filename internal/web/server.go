@@ -26,6 +26,7 @@ import (
 
 	"github.com/danvanton/discern/internal/app"
 	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/lang"
 	"github.com/danvanton/discern/internal/settings"
 )
 
@@ -421,7 +422,12 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.b.Approve(r.Context(), j.ID, titles, movie); err != nil {
-		s.showJob(w, r, http.StatusUnprocessableEntity, err.Error())
+		msg := err.Error()
+		if errors.Is(err, jobs.ErrNoMovie) {
+			// Worded here, where the form is: the engine doesn't know the page.
+			msg = "Choose the movie first: type its TMDb id in the box above the titles. It is the number in the movie's address on themoviedb.org."
+		}
+		s.showJob(w, r, http.StatusUnprocessableEntity, msg)
 		return
 	}
 	http.Redirect(w, r, fmt.Sprintf("/jobs/%d", j.ID), http.StatusSeeOther)
@@ -536,7 +542,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 type settingsData struct {
 	Version    string
 	Settings   settings.Settings
-	Choices    []settings.Choice
+	Choices    []lang.Language
 	Audio      []string // ticked boxes, most preferred first
 	FirstAudio string   // the preferred audio language
 	Subtitles  []string
@@ -587,9 +593,12 @@ func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		s.showSettings(w, http.StatusUnprocessableEntity, settingsData{Settings: st, Error: err.Error()}, langs)
 		return
 	}
+	// With MakeMKV's default on, settings.js disables the language choices,
+	// so they aren't sent. If they arrive anyway (the script didn't run),
+	// they aren't saved, and the page says so rather than drop them silently.
 	saved := "1"
 	if st.Languages == nil && len(audio)+len(langs.Subtitles) > 0 {
-		saved = "ignored" // say so, rather than drop the ticked languages silently
+		saved = "ignored"
 	}
 	http.Redirect(w, r, "/settings?saved="+saved, http.StatusSeeOther)
 }
@@ -597,7 +606,7 @@ func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
 // showSettings renders the page. form, if set, is what was submitted, so a
 // rejected form keeps its boxes; otherwise the saved languages are shown.
 func (s *server) showSettings(w http.ResponseWriter, status int, d settingsData, form *settings.Languages) {
-	d.Version, d.Choices = s.opt.Version, settings.Choices
+	d.Version, d.Choices = s.opt.Version, lang.All
 	l := form
 	if l == nil {
 		l = d.Settings.Languages
@@ -615,7 +624,7 @@ func (s *server) showSettings(w http.ResponseWriter, status int, d settingsData,
 // doesn't offer go last, for Validate to reject.
 func inChoiceOrder(codes []string) []string {
 	var out []string
-	for _, c := range settings.Choices {
+	for _, c := range lang.All {
 		if slices.Contains(codes, c.Code) {
 			out = append(out, c.Code)
 		}
