@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,8 +26,10 @@ import (
 	"time"
 
 	"github.com/danvanton/discern/internal/app"
+	"github.com/danvanton/discern/internal/drive"
 	"github.com/danvanton/discern/internal/jobs"
 	"github.com/danvanton/discern/internal/lang"
+	"github.com/danvanton/discern/internal/makemkv"
 	"github.com/danvanton/discern/internal/settings"
 )
 
@@ -53,6 +56,10 @@ type Backend interface {
 	Health(ctx context.Context) []app.Check
 	Settings(ctx context.Context) (settings.Settings, error)
 	SaveSettings(ctx context.Context, st settings.Settings) error
+	// For the redesigned pages (decisions D23, D29-D31).
+	Poster(tmdbID int) (path, contentType string, ok bool)
+	Live(drive string) (makemkv.Live, bool)
+	DriveState(drive string) drive.State
 }
 
 // Options configures the server.
@@ -105,6 +112,7 @@ func New(b Backend, opt Options) (http.Handler, error) {
 	mux.HandleFunc("GET /settings", s.settingsPage)
 	mux.HandleFunc("POST /settings", s.saveSettings)
 	mux.HandleFunc("GET /api/v1/jobs", s.apiJobs)
+	mux.HandleFunc("GET /posters/{tmdb}", s.poster)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 
 	// Health endpoints sit outside the login, for container health checks.
@@ -272,39 +280,53 @@ func fromThisSite(r *http.Request) bool {
 
 // Pages.
 
-type driveView struct {
-	Path    string
-	Pending bool // a new disc is waiting for the drive's current job to end
-}
-
 type dashboardData struct {
 	Version string
-	Drives  []driveView
-	Active  []*jobs.Job
-	Waiting []*jobs.Job
-	Recent  []*jobs.Job
+	Drives  []driveCard
+	Recent  []card
 	Error   string
 }
 
+// dashboardData lists each drive with its job, or its tray's state, and the
+// recent jobs. A job on a drive Discern no longer manages still gets a card.
 func (s *server) dashboardData(ctx context.Context) (dashboardData, error) {
 	active, err := s.b.ActiveJobs(ctx)
 	if err != nil {
 		return dashboardData{}, err
 	}
-	recent, err := s.b.RecentJobs(ctx, 20)
+	recent, err := s.b.RecentJobs(ctx, app.RecentShown)
 	if err != nil {
 		return dashboardData{}, err
 	}
-	d := dashboardData{Version: s.opt.Version, Recent: recent}
-	for _, p := range s.b.DriveList() {
-		d.Drives = append(d.Drives, driveView{Path: p, Pending: s.b.Pending(p)})
-	}
+	now := time.Now()
+	d := dashboardData{Version: s.opt.Version}
+	byDrive := map[string]*jobs.Job{}
 	for _, j := range active {
-		if j.State == jobs.NeedsYou {
-			d.Waiting = append(d.Waiting, j)
-		} else {
-			d.Active = append(d.Active, j)
+		byDrive[j.Drive] = j // one active job per drive (the store's unique index)
+	}
+	paths := s.b.DriveList()
+	for _, j := range active {
+		if !slices.Contains(paths, j.Drive) {
+			paths = append(paths, j.Drive)
 		}
+	}
+	for _, p := range paths {
+		dc := driveCard{Path: p, Name: driveName(p), Tray: s.b.DriveState(p), Pending: s.b.Pending(p)}
+		if j := byDrive[p]; j != nil {
+			c, err := s.cardFor(ctx, j, nil, now)
+			if err != nil {
+				return dashboardData{}, err
+			}
+			dc.Job = &c
+		}
+		d.Drives = append(d.Drives, dc)
+	}
+	for _, j := range recent {
+		c, err := s.cardFor(ctx, j, nil, now)
+		if err != nil {
+			return dashboardData{}, err
+		}
+		d.Recent = append(d.Recent, c)
 	}
 	return d, nil
 }
@@ -331,8 +353,24 @@ func (s *server) jobsFragment(w http.ResponseWriter, r *http.Request) {
 type jobData struct {
 	Version string
 	Job     *jobs.Job
+	Card    card
+	Steps   []step
 	Events  []jobs.Event
 	Error   string
+}
+
+// jobView builds what the job page and its live fragment show.
+func (s *server) jobView(ctx context.Context, j *jobs.Job) (jobData, error) {
+	events, err := s.b.Events(ctx, j.ID)
+	if err != nil {
+		return jobData{}, err
+	}
+	now := time.Now()
+	c, err := s.cardFor(ctx, j, events, now)
+	if err != nil {
+		return jobData{}, err
+	}
+	return jobData{Version: s.opt.Version, Job: j, Card: c, Steps: stepsFor(j, events, now), Events: events}, nil
 }
 
 func (s *server) loadJob(w http.ResponseWriter, r *http.Request) (*jobs.Job, bool) {
@@ -362,12 +400,13 @@ func (s *server) showJob(w http.ResponseWriter, r *http.Request, status int, msg
 	if !ok {
 		return
 	}
-	events, err := s.b.Events(r.Context(), j.ID)
+	d, err := s.jobView(r.Context(), j)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.render(w, status, "job.html", "layout", jobData{Version: s.opt.Version, Job: j, Events: events, Error: msg})
+	d.Error = msg
+	s.render(w, status, "job.html", "layout", d)
 }
 
 func (s *server) jobFragment(w http.ResponseWriter, r *http.Request) {
@@ -381,7 +420,43 @@ func (s *server) jobFragment(w http.ResponseWriter, r *http.Request) {
 	if !j.State.Active() || j.State == jobs.NeedsYou {
 		w.Header().Set("HX-Refresh", "true")
 	}
-	s.render(w, http.StatusOK, "job.html", "status", jobData{Job: j})
+	d, err := s.jobView(r.Context(), j)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.render(w, http.StatusOK, "job.html", "status", d)
+}
+
+// poster serves a cached poster. It is behind the login like every page:
+// which movies are in the drive is the owner's business.
+func (s *server) poster(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("tmdb"))
+	if err != nil || id <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	p, ct, ok := s.b.Poster(id)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", ct)
+	// A movie's poster doesn't change; a day saves the phone fetching it at
+	// every refresh.
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	http.ServeContent(w, r, "", info.ModTime(), f)
 }
 
 func (s *server) healthFragment(w http.ResponseWriter, r *http.Request) {

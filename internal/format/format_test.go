@@ -35,3 +35,27 @@ func TestClock(t *testing.T) {
 		}
 	}
 }
+
+func TestMinutes(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		0:                                "under a minute",
+		59 * time.Second:                 "under a minute",
+		time.Minute:                      "1 min",
+		18*time.Minute + 40*time.Second:  "19 min", // rounds to the nearest minute
+		59*time.Minute + 40*time.Second:  "1 h 00 min",
+		time.Hour + 5*time.Minute:        "1 h 05 min",
+		2*time.Hour + 30*time.Minute + 1: "2 h 30 min",
+	} {
+		if got := Minutes(d); got != want {
+			t.Errorf("Minutes(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+func TestRate(t *testing.T) {
+	for r, want := range map[float64]string{0: "0.0 MB/s", 4.5e6: "4.5 MB/s", 18.2e6: "18 MB/s", 27e6: "27 MB/s"} {
+		if got := Rate(r); got != want {
+			t.Errorf("Rate(%v) = %q, want %q", r, got, want)
+		}
+	}
+}

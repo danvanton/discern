@@ -1,11 +1,16 @@
-{{define "title"}}Job #{{.Job.ID}} · Discern{{end}}
+{{define "title"}}{{name .Job}} · Discern{{end}}
 
 {{define "content"}}
 <p><a href="/">← All jobs</a></p>
-<h1>{{discName .Job}} <span class="muted">#{{.Job.ID}}</span></h1>
+<header class="job-head">
+  {{template "poster" .Card}}
+  <div>
+    <h1>{{name .Job}}</h1>
+    <p class="muted">{{with .Job.Movie}}{{if .Year}}{{.Year}} · {{end}}{{end}}{{with .Card.Quality}}{{.}} · {{end}}drive {{.Job.Drive}}</p>
+    <p class="muted small">Started {{when .Job.CreatedAt}}</p>
+  </div>
+</header>
 {{if .Error}}<p class="alert" role="alert">{{.Error}}</p>{{end}}
-
-{{template "status" .}}
 
 {{if waiting .Job.State}}
 <form method="post" action="/jobs/{{.Job.ID}}/approve" class="panel ask">
@@ -23,28 +28,53 @@
   {{template "titles" .}}
   <button type="submit" class="primary">Rip and import</button>
 </form>
-{{else if .Job.Disc}}
-<section class="panel">
-  <h2>Titles on the disc</h2>
+{{else}}
+{{template "status" .}}
+{{if .Job.Disc}}
+<details class="panel">
+  <summary>Titles on the disc</summary>
   {{template "titles" .}}
-</section>
+</details>
+{{end}}
 {{end}}
 
-<section class="panel">
-  <h2>History</h2>
+<details class="panel">
+  <summary>History</summary>
   <ol class="events">
     {{range .Events}}
     <li><span class="muted small">{{when .At}}</span> {{if .From}}{{label .From}} → {{end}}<strong>{{label .To}}</strong>{{if .Note}} <span class="muted">{{.Note}}</span>{{end}}</li>
     {{end}}
   </ol>
-</section>
+</details>
 {{end}}
 
+{{/* Refreshed every 2 seconds while the job moves: its steps and, during
+     the rip, the time and the speeds (decisions D29, D30). */}}
 {{define "status"}}
 <section id="status" class="panel"{{if live .Job.State}} hx-get="/fragments/jobs/{{.Job.ID}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
-  <p>{{template "badge" .Job.State}} <span class="muted">on {{.Job.Drive}}</span></p>
-  <p>Movie: <strong>{{movieName .Job.Movie}}</strong>{{with .Job.Movie}} <span class="muted small">TMDb {{.TMDbID}}</span>{{end}}</p>
-  {{if ripping .Job.State}}{{template "progress" .Job.Progress}}<p class="muted small">{{pct .Job.Progress}}%</p>{{end}}
+  <p class="doing">{{doing .Job}}</p>
+  {{if .Steps}}
+  <ol class="steps">
+    {{range .Steps}}<li class="{{.State}}"><span>{{.Name}}</span>{{with .Detail}} <span class="muted small">{{.}}</span>{{end}}</li>
+    {{end}}
+  </ol>
+  {{end}}
+  {{if ripping .Job.State}}
+  {{template "progress" .Job.Progress}}
+  <dl class="stats">
+    <div><dt>Elapsed</dt><dd>{{if .Card.Timing.Running}}{{minutes .Card.Timing.Elapsed}}{{else}}–{{end}}</dd></div>
+    <div><dt>Left</dt><dd>{{if .Card.Timing.LeftKnown}}{{left .Card.Timing.Left}}{{else}}estimating{{end}}</dd></div>
+    {{with .Card.Live}}
+    <div><dt>Reading</dt><dd>{{if .ReadKnown}}{{rate .ReadRate}}{{else}}–{{end}}</dd></div>
+    <div><dt>Writing</dt><dd>{{rate .WriteRate}}</dd></div>
+    <div><dt>Watchdog</dt><dd class="verdict {{.Verdict}}">{{.Verdict}}</dd></div>
+    {{else}}
+    <div><dt>Speed</dt><dd class="muted">measuring</dd></div>
+    {{end}}
+  </dl>
+  {{else if .Card.Timing.Running}}
+  <p class="muted small">{{minutes .Card.Timing.Elapsed}} so far</p>
+  {{end}}
   {{if and .Job.Note (not (waiting .Job.State))}}<p class="note">{{.Job.Note}}</p>{{end}}
   <div class="actions">
     {{if failed .Job.State}}
@@ -59,8 +89,9 @@
 
 {{define "titles"}}
 {{$job := .Job}}{{$pick := waiting .Job.State}}
+<div class="table-scroll">
 <table class="titles">
-  <thead><tr>{{if $pick}}<th>Rip</th>{{end}}<th>#</th><th>Length</th><th>Size</th><th>Chapters</th><th>Playlist</th><th>Video</th><th>Audio</th></tr></thead>
+  <thead><tr>{{if $pick}}<th>Rip</th>{{end}}<th>Title</th><th>Length</th><th>Size</th><th>Chapters</th><th>Playlist</th><th>Video</th><th>Audio</th></tr></thead>
   <tbody>
   {{range .Job.Disc.Titles}}
     <tr{{if chosen $job .Index}} class="chosen"{{end}}>
@@ -76,4 +107,5 @@
   {{end}}
   </tbody>
 </table>
+</div>
 {{end}}

@@ -25,6 +25,7 @@ import (
 	"github.com/danvanton/discern/internal/jobs"
 	"github.com/danvanton/discern/internal/makemkv"
 	"github.com/danvanton/discern/internal/makemkv/install"
+	"github.com/danvanton/discern/internal/poster"
 	"github.com/danvanton/discern/internal/radarr"
 	"github.com/danvanton/discern/internal/steps"
 	"github.com/danvanton/discern/internal/store"
@@ -207,6 +208,11 @@ func run(log *slog.Logger) error {
 	} else {
 		log.Warn("mkvmerge not found: rips are checked by size only, not for missing audio, and Radarr isn't told their languages")
 	}
+	// The redesigned pages (decisions D23, D29-D31): posters cached in the
+	// config folder, the trays' states, and each rip's speeds.
+	a.Posters = poster.New(filepath.Join(cfg.DataDir, "posters"), a.PosterURL, log)
+	a.Trays = tracker
+	runner.OnLive = a.SetLive
 	if err := a.Resume(ctx); err != nil {
 		return fmt.Errorf("resuming jobs: %w", err)
 	}

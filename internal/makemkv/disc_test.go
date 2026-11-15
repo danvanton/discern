@@ -207,3 +207,21 @@ func TestAllTestdataScansParse(t *testing.T) {
 		r.Close()
 	}
 }
+
+func TestResolution(t *testing.T) {
+	for size, want := range map[string]int{
+		"3840x2160": 2160, "1920x1080": 1080, "1920x800": 1080, // cropped 2.39:1
+		"1440x1080": 1080, // anamorphic
+		"1280x720":  720, "720x480": 480, "720x576": 480,
+	} {
+		title := Title{Streams: []Stream{{Type: "Audio"}, {Type: "Video", VideoSize: size}}}
+		if got, ok := title.Resolution(); !ok || got != want {
+			t.Errorf("Resolution(%s) = %d, %v; want %d", size, got, ok, want)
+		}
+	}
+	for _, size := range []string{"", "1920", "axb", "0x1080", "-5x5"} {
+		if _, ok := (Title{Streams: []Stream{{Type: "Video", VideoSize: size}}}).Resolution(); ok {
+			t.Errorf("Resolution(%q) was readable", size)
+		}
+	}
+}

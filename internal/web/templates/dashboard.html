@@ -3,43 +3,52 @@
 {{define "content"}}
 {{if .Error}}<p class="alert" role="alert">{{.Error}}</p>{{end}}
 
-<section class="panel">
-  <h2>Drives</h2>
-  <ul class="drives">
-    {{range .Drives}}
-    <li>
-      <code>{{.Path}}</code>
-      {{if .Pending}}<span class="badge ask" title="It starts when the drive's current job ends">new disc waiting</span>{{end}}
-      <form method="post" action="/drives/scan">
-        <input type="hidden" name="drive" value="{{.Path}}">
-        <button type="submit">Scan disc</button>
-      </form>
-    </li>
-    {{end}}
-  </ul>
-  <p class="muted small">A disc going in starts on its own. Use Scan disc for one that was already in the drive when Discern started.</p>
+{{template "jobs" .}}
+
+<section class="system">
+  <h2 class="section">System</h2>
   <div id="health" hx-get="/fragments/health" hx-trigger="load, every 60s">Checking MakeMKV and Radarr…</div>
 </section>
-
-{{template "jobs" .}}
 {{end}}
 
+{{/* Refreshed every 2 seconds: the drives with their jobs, and the recent
+     jobs. */}}
 {{define "jobs"}}
 <div id="jobs" hx-get="/fragments/jobs" hx-trigger="every 2s" hx-swap="outerHTML">
-  {{if .Waiting}}
-  <section class="panel ask">
-    <h2>Needs you</h2>
-    {{template "joblist" .Waiting}}
+  <section class="drives">
+    {{range .Drives}}
+    <div class="drive">
+      <p class="drive-name">Drive {{.Name}}{{if .Pending}} <span class="badge ask" title="It starts when this job ends">new disc waiting</span>{{end}}</p>
+      {{with .Job}}{{template "card" .}}{{else}}
+      <div class="card idle">
+        <div class="poster none" aria-hidden="true"></div>
+        <div class="card-body">
+          <p class="card-title">{{tray .Tray}}</p>
+          <p class="muted small">A disc going in starts on its own. Scan one that was in the drive when Discern started.</p>
+          <form method="post" action="/drives/scan">
+            <input type="hidden" name="drive" value="{{.Path}}">
+            <button type="submit">Scan disc</button>
+          </form>
+        </div>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
   </section>
-  {{end}}
-  <section class="panel">
-    <h2>Working</h2>
-    {{if .Active}}{{template "joblist" .Active}}
-    {{else}}<p class="muted">Nothing is ripping. Put a disc in a drive.</p>{{end}}
-  </section>
-  <section class="panel">
-    <h2>History</h2>
-    {{if .Recent}}{{template "joblist" .Recent}}
+
+  <section class="recent">
+    <h2 class="section">Recent</h2>
+    {{if .Recent}}
+    <ul>
+      {{range .Recent}}
+      <li><a href="/jobs/{{.Job.ID}}">
+        {{template "poster" .}}
+        <span class="recent-name">{{name .Job}}{{with .Job.Movie}}{{if .Year}} <span class="muted small">{{.Year}}</span>{{end}}{{end}}</span>
+        <span class="recent-state {{kind .Job.State}}">{{doing .Job}}{{if failed .Job.State}}{{with firstLine .Job.Note}}: {{.}}{{end}}{{end}}</span>
+        <span class="muted small" title="{{when .Job.UpdatedAt}}">{{ago .Job.UpdatedAt}}</span>
+      </a></li>
+      {{end}}
+    </ul>
     {{else}}<p class="muted">No finished jobs yet.</p>{{end}}
   </section>
 </div>

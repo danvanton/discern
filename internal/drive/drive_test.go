@@ -122,3 +122,20 @@ func TestTrackerCountsChanges(t *testing.T) {
 		t.Errorf("generation = %d, %v; want 3 changes (open, empty, ready), known", gen, ok)
 	}
 }
+
+// The tracker keeps the last state read, for the dashboard: Unknown until
+// the first read and while the drive can't be read.
+func TestTrackerKeepsTheLastState(t *testing.T) {
+	tr := NewTracker()
+	if s := tr.State("/dev/sr0"); s != Unknown {
+		t.Errorf("before any read: %v", s)
+	}
+	tr.observe("/dev/sr0", TrayOpen, false)
+	if s := tr.State("/dev/sr0"); s != TrayOpen {
+		t.Errorf("after a read: %v; want tray open", s)
+	}
+	tr.observe("/dev/sr0", Unknown, true) // the drive couldn't be read
+	if s := tr.State("/dev/sr0"); s != Unknown {
+		t.Errorf("after a failed read: %v; want unknown", s)
+	}
+}

@@ -13,7 +13,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/danvanton/discern/internal/drive"
 	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/poster"
 	"github.com/danvanton/discern/internal/radarr"
 	"github.com/danvanton/discern/internal/settings"
 	"github.com/danvanton/discern/internal/store"
@@ -36,17 +39,33 @@ type App struct {
 	// MakeMKVSettings is MakeMKV's settings.conf, where the language choice
 	// goes before each rip; empty to leave it alone (development).
 	MakeMKVSettings string
+	// Posters, if set, fetches a job's poster once its movie is known.
+	Posters *poster.Cache
+	// Trays, if set, says what each drive's tray is doing.
+	Trays *drive.Tracker
 
 	base context.Context // runs end when this does (shutdown)
 	wg   sync.WaitGroup
 
 	mu      sync.Mutex
-	pending map[string]bool // drives with a new disc waiting for the drive to free up
+	pending map[string]bool      // drives with a new disc waiting for the drive to free up
+	live    map[string]liveEntry // how each drive's rip is going (decision D30)
 }
+
+// liveEntry is a rip's latest report, and when it came.
+type liveEntry struct {
+	makemkv.Live
+	at time.Time
+}
+
+// liveFresh is how old a rip's report may be and still be shown: a few
+// watchdog samples. Anything older belongs to a rip that has ended.
+const liveFresh = 2 * time.Minute
 
 // New returns an App whose job runs stop when base is cancelled.
 func New(base context.Context, st *store.Store, engine *jobs.Engine, rc *radarr.Client, log *slog.Logger) *App {
-	return &App{store: st, engine: engine, radarr: rc, log: log, base: base, pending: map[string]bool{}}
+	return &App{store: st, engine: engine, radarr: rc, log: log, base: base,
+		pending: map[string]bool{}, live: map[string]liveEntry{}}
 }
 
 // start runs a job in the background. A job already running is left alone.
@@ -55,6 +74,14 @@ func (a *App) start(id int64) {
 	go func() {
 		defer a.wg.Done()
 		err := a.engine.Run(a.base, id)
+		if !errors.Is(err, jobs.ErrRunning) {
+			// The run stopped: its rip, if any, has ended, and the movie is
+			// known by now if identification found it.
+			if j, jerr := a.store.Job(context.WithoutCancel(a.base), id); jerr == nil {
+				a.endLive(j.Drive)
+				a.fetchPoster(j.Movie)
+			}
+		}
 		switch {
 		case errors.Is(err, jobs.ErrRunning):
 			return
@@ -153,6 +180,9 @@ func (a *App) Approve(ctx context.Context, id int64, titles []int, movie *jobs.M
 	if err := a.engine.Approve(ctx, id, titles, movie); err != nil {
 		return err
 	}
+	// The user may have chosen a different movie: its poster is wanted now,
+	// not when the rip ends.
+	a.fetchPoster(movie)
 	a.start(id)
 	return nil
 }
@@ -187,7 +217,102 @@ func (a *App) Resume(ctx context.Context) error {
 		a.log.Info("resuming job", "job", id)
 		a.start(id)
 	}
+	// Posters that failed, or jobs from before posters existed: the
+	// dashboard shows the active jobs and the recent ones. A poster is
+	// decoration, so a failed read here is logged, never a reason not to start.
+	active, err := a.store.ActiveJobs(ctx)
+	if err == nil {
+		var recent []*jobs.Job
+		recent, err = a.store.RecentJobs(ctx, RecentShown)
+		for _, j := range append(active, recent...) {
+			a.fetchPoster(j.Movie)
+		}
+	}
+	if err != nil {
+		a.log.Warn("not fetching missing posters at start", "err", err)
+	}
 	return nil
+}
+
+// RecentShown is how many finished jobs the dashboard lists.
+const RecentShown = 20
+
+// fetchPoster gets the movie's poster in the background. A poster is
+// decoration: nothing waits for it, and a failure is only logged.
+func (a *App) fetchPoster(m *jobs.Movie) {
+	// Nothing new starts once shutdown has begun: Wait may already be
+	// waiting, and a page can still ask for a poster then.
+	if a.Posters == nil || m == nil || m.TMDbID <= 0 || a.base.Err() != nil {
+		return
+	}
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		a.Posters.Fetch(a.base, m.TMDbID) // logs its own failure
+	}()
+}
+
+// PosterURL is the poster's address according to Radarr's lookup, for
+// poster.Cache.
+func (a *App) PosterURL(ctx context.Context, tmdbID int) (string, error) {
+	m, err := a.radarr.LookupTMDb(ctx, tmdbID)
+	if err != nil {
+		return "", err
+	}
+	if u := m.PosterURL(); u != "" {
+		return u, nil
+	}
+	return "", fmt.Errorf("radarr's lookup has no poster for %s", m.Title)
+}
+
+// Poster returns the cached poster for a movie, if there is one. A missing
+// poster whose last try is an hour old is fetched again in the background,
+// so a brief outage doesn't cost it for good.
+func (a *App) Poster(tmdbID int) (path, contentType string, ok bool) {
+	if a.Posters == nil {
+		return "", "", false
+	}
+	if path, contentType, ok = a.Posters.File(tmdbID); !ok && a.Posters.Due(tmdbID) {
+		a.fetchPoster(&jobs.Movie{TMDbID: tmdbID})
+	}
+	return path, contentType, ok
+}
+
+// SetLive records how drive's rip is going. It is makemkv.Runner.OnLive.
+// A job ripping several titles starts makemkvcon once per title; the run's
+// first start is kept, since its progress counts all titles together.
+func (a *App) SetLive(drive string, l makemkv.Live) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if prev, ok := a.live[drive]; ok && !prev.Started.IsZero() && prev.Started.Before(l.Started) {
+		l.Started = prev.Started
+	}
+	a.live[drive] = liveEntry{Live: l, at: time.Now()}
+}
+
+// Live returns how drive's rip is going, if it reported recently.
+func (a *App) Live(drive string) (makemkv.Live, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	e, ok := a.live[drive]
+	if !ok || time.Since(e.at) > liveFresh {
+		return makemkv.Live{}, false
+	}
+	return e.Live, true
+}
+
+func (a *App) endLive(drive string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.live, drive)
+}
+
+// DriveState is what drive's tray is doing, as the watcher last read it.
+func (a *App) DriveState(d string) drive.State {
+	if a.Trays == nil {
+		return drive.Unknown
+	}
+	return a.Trays.State(d)
 }
 
 // Wait waits for running jobs to stop after base is cancelled, at most

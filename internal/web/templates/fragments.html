@@ -4,23 +4,20 @@
      Content-Security-Policy would block. */}}
 {{define "progress"}}<progress class="bar" max="100" value="{{pct .}}">{{pct .}}%</progress>{{end}}
 
-{{define "joblist"}}
-<table class="jobs">
-  <thead><tr><th>Job</th><th>Disc</th><th>Movie</th><th>State</th><th>Changed</th></tr></thead>
-  <tbody>
-  {{range .}}
-    <tr>
-      <td><a href="/jobs/{{.ID}}">#{{.ID}}</a></td>
-      <td>{{discName .}}<div class="muted small">{{.Drive}}</div></td>
-      <td>{{movieName .Movie}}</td>
-      <td>
-        {{template "badge" .State}}
-        {{if ripping .State}}{{template "progress" .Progress}}{{end}}
-        {{if .Note}}<div class="muted small">{{.Note}}</div>{{end}}
-      </td>
-      <td class="muted small" title="{{when .UpdatedAt}}">{{ago .UpdatedAt}}</td>
-    </tr>
-  {{end}}
-  </tbody>
-</table>
+{{/* The poster, from Discern's own cache (decision D23), or the name's first
+     letter in its place. Decorative: the name is always written beside it. */}}
+{{define "poster"}}{{if .Poster}}<img class="poster" src="/posters/{{.Job.Movie.TMDbID}}" alt="" width="342" height="513">{{else}}<div class="poster none" aria-hidden="true">{{initial .Job}}</div>{{end}}{{end}}
+
+{{/* A job's card: the whole card is the link to its page (decision D22). */}}
+{{define "card"}}
+<a class="card {{kind .Job.State}}" href="/jobs/{{.Job.ID}}">
+  {{template "poster" .}}
+  <div class="card-body">
+    <p class="card-title">{{name .Job}}</p>
+    <p class="muted small">{{.Line}}</p>
+    <p class="doing">{{doing .Job}}</p>
+    {{if ripping .Job.State}}{{template "progress" .Job.Progress}}{{end}}
+    {{if .Timing.Running}}<p class="muted small">{{minutes .Timing.Elapsed}} in{{if ripping .Job.State}} · {{if .Timing.LeftKnown}}{{left .Timing.Left}} left{{else}}estimating time left{{end}}{{end}}</p>{{end}}
+  </div>
+</a>
 {{end}}

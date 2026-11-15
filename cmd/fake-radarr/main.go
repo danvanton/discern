@@ -37,7 +37,11 @@ func main() {
 	}
 	s := radarrtest.New("dev-key", local, *remote, lib)
 	s.SetLookup(
-		map[string]any{"tmdbId": 603, "title": "The Matrix", "year": 1999},
+		// A real poster address, so the demo shows one (Discern fetches it
+		// from TMDb's image server). The others have none, as some movies
+		// don't: the page must look right without.
+		map[string]any{"tmdbId": 603, "title": "The Matrix", "year": 1999, "images": []map[string]any{
+			{"coverType": "poster", "remoteUrl": "https://image.tmdb.org/t/p/original/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg"}}},
 		map[string]any{"tmdbId": 559, "title": "Spider-Man 3", "year": 2007},
 		map[string]any{"tmdbId": 335984, "title": "Blade Runner 2049", "year": 2017},
 	)

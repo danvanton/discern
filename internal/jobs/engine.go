@@ -150,6 +150,12 @@ func (e *Engine) step(ctx context.Context, j *Job) error {
 		return e.move(ctx, j, NeedsYou, sel.Reason)
 
 	case Ripping:
+		// A fresh attempt starts at 0, before the disc check: that can take
+		// minutes (a rescan after a restart), and the pages must not show the
+		// last attempt's progress, or a time left worked out from it.
+		if err := e.store.SetProgress(ctx, j.ID, 0); err != nil {
+			return err
+		}
 		if err := e.steps.CheckDisc(ctx, j); err != nil {
 			if errors.Is(err, ErrDiscChanged) {
 				// The job's disc is gone: retrying it means starting over
@@ -163,9 +169,6 @@ func (e *Engine) step(ctx context.Context, j *Job) error {
 		// left is never trusted. This is what makes the step safe to rerun.
 		if err := os.RemoveAll(dir); err != nil {
 			return e.fail(ctx, j, "clear staging", err)
-		}
-		if err := e.store.SetProgress(ctx, j.ID, 0); err != nil {
-			return err
 		}
 		if err := e.steps.Rip(ctx, j, dir, e.progressWriter(j.ID)); err != nil {
 			return e.fail(ctx, j, "rip", err)

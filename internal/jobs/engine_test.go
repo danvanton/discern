@@ -36,6 +36,7 @@ type fakeSteps struct {
 	ripSawDir   func(dir string)    // called with the staging folder
 	importDone  func(dir string)    // called by Import
 	onRip       func(func(float64)) // progress reports to send
+	onCheck     func(*jobs.Job)     // called by CheckDisc
 }
 
 func (f *fakeSteps) record(step string) error {
@@ -56,7 +57,10 @@ func (f *fakeSteps) ran() []string {
 
 var sampleDisc = &makemkv.Disc{Volume: "SAMPLE", Titles: []makemkv.Title{{Index: 0}, {Index: 1}}}
 
-func (f *fakeSteps) CheckDisc(context.Context, *jobs.Job) error {
+func (f *fakeSteps) CheckDisc(_ context.Context, j *jobs.Job) error {
+	if f.onCheck != nil {
+		f.onCheck(j)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.checks++
@@ -522,6 +526,30 @@ func TestProgressSurvivesAFailedRip(t *testing.T) {
 	got, _ := e.store.Job(ctx, j.ID)
 	if got.State != jobs.Failed || got.Progress != 0.73 {
 		t.Errorf("state %s, progress %v; want failed at 0.73", got.State, got.Progress)
+	}
+}
+
+// A retried rip starts at 0 before its disc check, which can take minutes:
+// the pages must not show the failed attempt's 73% meanwhile.
+func TestARetriedRipStartsAtZeroBeforeTheDiscCheck(t *testing.T) {
+	steps := &fakeSteps{auto: true, failIn: "rip"}
+	steps.onRip = func(progress func(float64)) { progress(0.73) }
+	e := newEnv(t, steps)
+	j, _ := e.store.CreateJob(ctx, "/dev/sr0")
+	e.engine.Run(ctx, j.ID)
+
+	steps.failIn = ""
+	var during float64 = -1
+	steps.onCheck = func(*jobs.Job) {
+		got, _ := e.store.Job(ctx, j.ID)
+		during = got.Progress
+	}
+	if err := e.engine.Retry(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	e.engine.Run(ctx, j.ID)
+	if during != 0 {
+		t.Errorf("progress during the disc check = %v; want 0", during)
 	}
 }
 

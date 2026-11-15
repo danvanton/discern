@@ -34,6 +34,11 @@ type Runner struct {
 	// FAKE_MAKEMKVCON when it is the fake (tests and development).
 	Env []string
 
+	// OnLive, if set, is told how each rip is going after every watchdog
+	// sample, with the drive it reads from. It is called on the rip's
+	// goroutine, so it must return quickly.
+	OnLive func(device string, l Live)
+
 	// Seams for tests and for operating systems without /proc. They default
 	// to the /proc implementations on Linux.
 	readCounter func(pid int) (int64, error)
@@ -185,6 +190,7 @@ func (r *Runner) Rip(ctx context.Context, device string, title int, outDir strin
 		readDone <- out.consume(stdout, progress.send, stop)
 	}()
 
+	started := time.Now()
 	samples := newRing[Sample](360) // the last hour at the default interval
 	wd := NewWatchdog(r.Watchdog)
 	ticker := time.NewTicker(r.Watchdog.Interval)
@@ -202,7 +208,14 @@ loop:
 			break loop
 		case <-tick:
 			s := r.sample(cmd.Process.Pid, outDir, samples)
-			if v := wd.Observe(s); v != Healthy {
+			v := wd.Observe(s)
+			if r.OnLive != nil {
+				if l, ok := liveFrom(samples.items(), liveWindow, v); ok {
+					l.Started = started
+					r.OnLive(device, l)
+				}
+			}
+			if v != Healthy {
 				// The evidence must be saved before the process stops: the
 				// debug log only exists while makemkvcon holds it open.
 				werr = &WatchdogError{Verdict: v, Evidence: r.evidence(v, cmd.Process.Pid, samples.items(), out, stderr.String())}

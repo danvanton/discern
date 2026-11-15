@@ -9,7 +9,6 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -412,9 +411,7 @@ func fileQuality(m *radarr.Movie) (string, error) {
 }
 
 // QualityName is the Radarr quality for the job's rip, from the chosen
-// title's video size: the higher of what the width and the height say. Width
-// catches films cropped to 2.39:1 and stored as 1920x800; height catches
-// anamorphic 1440x1080 Blu-rays. Both are 1080p. Discs are ripped without
+// title's resolution (makemkv.Title.Resolution). Discs are ripped without
 // re-encoding, so Blu-ray rips are remuxes.
 func QualityName(j *jobs.Job) (string, error) {
 	if j.Disc == nil || len(j.Titles) == 0 {
@@ -424,44 +421,22 @@ func QualityName(j *jobs.Job) (string, error) {
 		if t.Index != j.Titles[0] {
 			continue
 		}
-		for _, s := range t.Streams {
-			if s.Type != "Video" || s.VideoSize == "" {
-				continue
-			}
-			ws, hs, ok := strings.Cut(s.VideoSize, "x")
-			w, errW := strconv.Atoi(ws)
-			h, errH := strconv.Atoi(hs)
-			if !ok || errW != nil || errH != nil || w <= 0 || h <= 0 {
-				break
-			}
-			switch grade := max(gradeOf(w, 3800, 1900, 1270), gradeOf(h, 2000, 1000, 700)); grade {
-			case 3:
-				return "Remux-2160p", nil
-			case 2:
-				return "Remux-1080p", nil
-			case 1:
-				return "Bluray-720p", nil
-			default:
-				return "DVD", nil
-			}
+		res, ok := t.Resolution()
+		if !ok {
+			return "", fmt.Errorf("title %d has no readable video size, so its quality is unknown; not importing", t.Index)
 		}
-		return "", fmt.Errorf("title %d has no readable video size, so its quality is unknown; not importing", t.Index)
+		switch res {
+		case 2160:
+			return "Remux-2160p", nil
+		case 1080:
+			return "Remux-1080p", nil
+		case 720:
+			return "Bluray-720p", nil
+		default:
+			return "DVD", nil
+		}
 	}
 	return "", fmt.Errorf("title %d is not in the scan", j.Titles[0])
-}
-
-// gradeOf places a dimension against the 2160p, 1080p and 720p thresholds:
-// 3, 2, 1, or 0 for standard definition.
-func gradeOf(v, uhd, fhd, hd int) int {
-	switch {
-	case v >= uhd:
-		return 3
-	case v >= fhd:
-		return 2
-	case v >= hd:
-		return 1
-	}
-	return 0
 }
 
 func suffix(s string) string {

@@ -10,12 +10,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/danvanton/discern/internal/app"
+	"github.com/danvanton/discern/internal/drive"
 	"github.com/danvanton/discern/internal/jobs"
 	"github.com/danvanton/discern/internal/makemkv"
 	"github.com/danvanton/discern/internal/settings"
@@ -32,6 +36,11 @@ type fakeBackend struct {
 	failNext    error
 	settings    *settings.Settings
 	settingsErr error
+	posters     map[int]string // TMDb id → cached file
+	live        map[string]makemkv.Live
+	trays       map[string]drive.State
+	events      map[int64][]jobs.Event
+	active      []int64 // the active jobs; 1 and 2 if nil
 }
 
 func newBackend() *fakeBackend {
@@ -59,11 +68,22 @@ func (f *fakeBackend) Job(_ context.Context, id int64) (*jobs.Job, error) {
 	}
 	return nil, jobs.ErrNotFound
 }
-func (f *fakeBackend) Events(context.Context, int64) ([]jobs.Event, error) {
+func (f *fakeBackend) Events(_ context.Context, id int64) ([]jobs.Event, error) {
+	if e, ok := f.events[id]; ok {
+		return e, nil
+	}
 	return []jobs.Event{{To: jobs.Detected}, {From: jobs.Detected, To: jobs.Scanning}}, nil
 }
 func (f *fakeBackend) ActiveJobs(context.Context) ([]*jobs.Job, error) {
-	return []*jobs.Job{f.jobs[1], f.jobs[2]}, nil
+	ids := f.active
+	if ids == nil {
+		ids = []int64{1, 2}
+	}
+	var out []*jobs.Job
+	for _, id := range ids {
+		out = append(out, f.jobs[id])
+	}
+	return out, nil
 }
 func (f *fakeBackend) RecentJobs(context.Context, int) ([]*jobs.Job, error) {
 	return []*jobs.Job{f.jobs[3], f.jobs[4]}, nil
@@ -113,6 +133,18 @@ func (f *fakeBackend) SaveSettings(_ context.Context, st settings.Settings) erro
 	f.settings = &st
 	return nil
 }
+
+func (f *fakeBackend) Poster(tmdbID int) (string, string, bool) {
+	p, ok := f.posters[tmdbID]
+	return p, "image/png", ok
+}
+
+func (f *fakeBackend) Live(d string) (makemkv.Live, bool) {
+	l, ok := f.live[d]
+	return l, ok
+}
+
+func (f *fakeBackend) DriveState(d string) drive.State { return f.trays[d] }
 
 const user, pass = "dan", "correct horse battery"
 
@@ -196,18 +228,128 @@ func TestDashboardShowsTheJobs(t *testing.T) {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
 	for _, want := range []string{
-		"Needs you", "The Matrix (1999)", `href="/jobs/1"`, // the waiting job
-		`<progress class="bar" max="100" value="42">`, // the ripping job's progress
-		"Scan disc", "/dev/sr1", "v0.1-test", "new disc waiting",
+		// The waiting job, named by its movie, with its year and quality.
+		"Needs you: check and approve", "The Matrix", "1999 · 4K", `href="/jobs/1"`,
+		// The ripping job, named by its disc until the movie is known.
+		"Ripping 42%", "Sample Movie", `<progress class="bar" max="100" value="42">`,
+		"Drive sr0", "Drive sr1", "new disc waiting", "v0.1-test",
+		// Recent jobs say how they ended, and a failure why, escaped.
+		"In Radarr", "Failed: verify failed: &lt;b&gt;boom&lt;/b&gt;",
 		`src="/static/htmx.min.js"`, `hx-get="/fragments/jobs"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard is missing %q", want)
 		}
 	}
-	// Notes are escaped, never rendered as HTML.
+	if strings.Contains(body, "<b>boom</b>") {
+		t.Error("a job note was not escaped")
+	}
+}
+
+// A drive without a job shows what its tray is doing, and the Scan button.
+func TestDashboardShowsAnIdleDrivesTray(t *testing.T) {
+	for state, want := range map[drive.State]string{
+		drive.TrayOpen: "Tray open", drive.NoDisc: "Empty", drive.NotReady: "Disc loading",
+		drive.DiscOK: "Disc in, not started", drive.Unknown: "Waiting for a disc",
+	} {
+		b := newBackend()
+		b.active = []int64{2} // only sr1 is busy
+		b.trays = map[string]drive.State{"/dev/sr0": state}
+		_, body := get(t, newServer(t, b), "/")
+		if !strings.Contains(body, want) || !strings.Contains(body, "Scan disc") || !strings.Contains(body, `value="/dev/sr0"`) {
+			t.Errorf("tray %v: the idle drive doesn't say %q with a Scan button", state, want)
+		}
+	}
+}
+
+// Jobs are named, never numbered (decision D22). The number stays in the
+// address only.
+func TestNoJobNumbersShown(t *testing.T) {
+	srv := newServer(t, newBackend())
+	for _, page := range []string{"/", "/jobs/1", "/jobs/2", "/jobs/3"} {
+		_, body := get(t, srv, page)
+		text := regexp.MustCompile(`<[^>]*>`).ReplaceAllString(body, " ")
+		if regexp.MustCompile(`#\s*\d`).MatchString(text) || strings.Contains(text, "Job ") {
+			t.Errorf("%s shows a job number", page)
+		}
+	}
+}
+
+// The ripping page shows the steps, the time so far and left, and the speeds
+// the watchdog measured (decisions D29, D30).
+func TestRippingPageShowsTimeAndSpeeds(t *testing.T) {
+	b := newBackend()
+	now := time.Now()
+	b.events = map[int64][]jobs.Event{2: {
+		{At: now.Add(-25 * time.Minute), To: jobs.Detected},
+		{At: now.Add(-25 * time.Minute), From: jobs.Detected, To: jobs.Scanning},
+		{At: now.Add(-22 * time.Minute), From: jobs.Scanning, To: jobs.Identifying},
+		{At: now.Add(-22 * time.Minute), From: jobs.Identifying, To: jobs.Selecting},
+		{At: now.Add(-22 * time.Minute), From: jobs.Selecting, To: jobs.NeedsYou},
+		{At: now.Add(-18 * time.Minute), From: jobs.NeedsYou, To: jobs.Ripping},
+	}}
+	b.live = map[string]makemkv.Live{"/dev/sr1": {ReadRate: 27e6, WriteRate: 26.4e6, ReadKnown: true, Verdict: makemkv.Healthy}}
+	_, body := get(t, newServer(t, b), "/jobs/2")
+	for _, want := range []string{
+		`<li class="done"><span>Read the disc</span> <span class="muted small">3 min</span>`, // the scan, not the wait
+		`<li class="now"><span>Rip</span>`, `<li class="next"><span>Check the rip</span>`,
+		"<dt>Elapsed</dt><dd>18 min</dd>",
+		"<dt>Left</dt><dd>about 25 min</dd>", // 18 min for 42%: 25 more for 58%
+		"<dt>Reading</dt><dd>27 MB/s</dd>", "<dt>Writing</dt><dd>26 MB/s</dd>",
+		`<dd class="verdict healthy">healthy</dd>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("ripping page is missing %q", want)
+		}
+	}
+
+	// Before the watchdog's first report: no made-up speeds.
+	b.live = nil
+	if _, body := get(t, newServer(t, b), "/jobs/2"); !strings.Contains(body, "measuring") || strings.Contains(body, "MB/s") {
+		t.Error("without a report, the page should say the speed is being measured")
+	}
+}
+
+// A failed job shows where it failed and its note, escaped.
+func TestFailedJobPage(t *testing.T) {
+	_, body := get(t, newServer(t, newBackend()), "/jobs/3")
+	if !strings.Contains(body, `<li class="failed"><span>Check the rip</span>`) || !strings.Contains(body, "Retry") {
+		t.Error("the failed job doesn't show the failed step and Retry")
+	}
 	if strings.Contains(body, "<b>boom</b>") || !strings.Contains(body, "&lt;b&gt;boom&lt;/b&gt;") {
 		t.Error("a job note was not escaped")
+	}
+}
+
+// Posters come from Discern's cache, behind the login (decision D23).
+func TestPosters(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "603.png")
+	if err := os.WriteFile(file, []byte("\x89PNG\r\n\x1a\nfake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b := newBackend()
+	// 0 and -1 are there to show the handler refuses such ids before asking.
+	b.posters = map[int]string{603: file, 0: file, -1: file}
+	srv := newServer(t, b)
+
+	if _, body := get(t, srv, "/"); !strings.Contains(body, `<img class="poster" src="/posters/603"`) {
+		t.Error("the dashboard doesn't show The Matrix's poster")
+	}
+	if _, body := get(t, srv, "/jobs/2"); !strings.Contains(body, `<div class="poster none" aria-hidden="true">S</div>`) {
+		t.Error("a job without a poster should show its name's first letter")
+	}
+	resp, body := get(t, srv, "/posters/603")
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "image/png" ||
+		resp.Header.Get("Cache-Control") != "private, max-age=86400" || !strings.HasSuffix(body, "fake") {
+		t.Errorf("poster: %d %q %q", resp.StatusCode, resp.Header.Get("Content-Type"), resp.Header.Get("Cache-Control"))
+	}
+	for _, bad := range []string{"/posters/604", "/posters/abc", "/posters/-1", "/posters/0"} {
+		if resp, _ := get(t, srv, bad); resp.StatusCode != 404 {
+			t.Errorf("%s: %d; want 404", bad, resp.StatusCode)
+		}
+	}
+	if resp, _ := do(t, srv, "GET", "/posters/603", nil, false, nil); resp.StatusCode != 401 {
+		t.Errorf("a poster without the login: %d; want 401", resp.StatusCode)
 	}
 }
 

@@ -105,6 +105,23 @@ type Movie struct {
 	HasFile   bool       `json:"hasFile"`
 	Path      string     `json:"path"`
 	MovieFile *MovieFile `json:"movieFile,omitempty"`
+	Images    []Image    `json:"images,omitempty"`
+}
+
+// Image is one of a movie's pictures, as Radarr's lookup gives them.
+type Image struct {
+	CoverType string `json:"coverType"` // "poster", "fanart", …
+	RemoteURL string `json:"remoteUrl"` // where TMDb serves it
+}
+
+// PosterURL returns the movie's poster address at TMDb, or "".
+func (m *Movie) PosterURL() string {
+	for _, img := range m.Images {
+		if img.CoverType == "poster" {
+			return img.RemoteURL
+		}
+	}
+	return ""
 }
 
 // MovieFile is the movie's file, once it has one.

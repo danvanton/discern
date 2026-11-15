@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danvanton/discern/internal/drive"
 	"github.com/danvanton/discern/internal/format"
 	"github.com/danvanton/discern/internal/jobs"
 	"github.com/danvanton/discern/internal/lang"
@@ -79,6 +80,88 @@ var funcs = template.FuncMap{
 	},
 	"ripping": func(s jobs.State) bool { return s == jobs.Ripping },
 	"live":    func(s jobs.State) bool { return s.Active() && s != jobs.NeedsYou },
+	"name":    jobName,
+	"doing":   doing,
+	"tray":    trayLabel,
+	"minutes": format.Minutes,
+	// left words an estimate: "about 25 min", or "under a minute" (never
+	// "about under a minute").
+	"left": func(d time.Duration) string {
+		if d < time.Minute {
+			return format.Minutes(d)
+		}
+		return "about " + format.Minutes(d)
+	},
+	"rate": format.Rate,
+	// firstLine is a note's first line: enough on the dashboard to tell a
+	// swapped disc from a stall. The job page shows the whole note.
+	"firstLine": func(s string) string {
+		first, _, _ := strings.Cut(s, "\n")
+		return first
+	},
+	"initial": func(j *jobs.Job) string {
+		for _, r := range jobName(j) {
+			return strings.ToUpper(string(r))
+		}
+		return "?"
+	},
+}
+
+// jobName is how a job is called on every page (decision D22: no job
+// numbers): its movie, or the disc's name until the movie is known.
+func jobName(j *jobs.Job) string {
+	if j.Movie != nil && j.Movie.Title != "" {
+		return j.Movie.Title
+	}
+	if j.Disc != nil {
+		if j.Disc.Name != "" {
+			return j.Disc.Name
+		}
+		if j.Disc.Volume != "" {
+			return j.Disc.Volume
+		}
+	}
+	return "New disc"
+}
+
+// doing says in words what a job is doing, or how it ended.
+func doing(j *jobs.Job) string {
+	switch j.State {
+	case jobs.Detected, jobs.Scanning:
+		return "Reading the disc"
+	case jobs.Identifying, jobs.Selecting:
+		return "Working out the movie"
+	case jobs.NeedsYou:
+		return "Needs you: check and approve"
+	case jobs.Ripping:
+		return fmt.Sprintf("Ripping %d%%", int(j.Progress*100+0.5))
+	case jobs.Verifying:
+		return "Checking the rip"
+	case jobs.Importing:
+		return "Importing to Radarr"
+	case jobs.Done:
+		return "In Radarr"
+	case jobs.Failed:
+		return "Failed"
+	case jobs.Cancelled:
+		return "Cancelled"
+	}
+	return stateLabel(j.State)
+}
+
+// trayLabel says what an idle drive's tray is doing.
+func trayLabel(s drive.State) string {
+	switch s {
+	case drive.NoDisc:
+		return "Empty"
+	case drive.TrayOpen:
+		return "Tray open"
+	case drive.NotReady:
+		return "Disc loading"
+	case drive.DiscOK:
+		return "Disc in, not started"
+	}
+	return "Waiting for a disc"
 }
 
 func stateLabel(s jobs.State) string {

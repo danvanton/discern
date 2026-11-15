@@ -34,7 +34,7 @@ export FAKE_MAKEMKVCON='{"info":{"file":"testdata/makemkv/info-demo-small.txt"},
 ./bin/discern
 ```
 
-Open http://127.0.0.1:18790 and press **Scan disc**. The demo disc is identified as The Matrix and title 0 is suggested. Press **Rip and import**: the progress bar runs for a few seconds, then the job imports into `dev/library` and shows **Done**.
+Open http://127.0.0.1:18790 and press **Scan disc**. The demo disc is identified as The Matrix and title 0 is suggested. Press **Rip and import**: the progress bar runs for a few seconds, then the job imports into `dev/library` and shows **In Radarr**. The demo fetches The Matrix's poster from TMDb's image server; offline, the card shows the title's first letter instead.
 
 ## Run it with Docker
 

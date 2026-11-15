@@ -292,3 +292,37 @@ func optionalInt64(a map[Attr]string, attr Attr) (int64, error) {
 	}
 	return n, nil
 }
+
+// Resolution is the title's picture as a line count: 2160, 1080, 720, or 480
+// for standard definition. It takes the higher of what the width and the
+// height say: width catches films cropped to 2.39:1 and stored as 1920x800;
+// height catches anamorphic 1440x1080 Blu-rays. Both are 1080. It reports
+// false when the title has no readable video size.
+func (t Title) Resolution() (int, bool) {
+	for _, s := range t.Streams {
+		if s.Type != "Video" || s.VideoSize == "" {
+			continue
+		}
+		ws, hs, ok := strings.Cut(s.VideoSize, "x")
+		w, errW := strconv.Atoi(ws)
+		h, errH := strconv.Atoi(hs)
+		if !ok || errW != nil || errH != nil || w <= 0 || h <= 0 {
+			return 0, false
+		}
+		return max(lines(w, 3800, 1900, 1270), lines(h, 2000, 1000, 700)), true
+	}
+	return 0, false
+}
+
+// lines places a dimension against the 2160, 1080 and 720 thresholds.
+func lines(v, uhd, fhd, hd int) int {
+	switch {
+	case v >= uhd:
+		return 2160
+	case v >= fhd:
+		return 1080
+	case v >= hd:
+		return 720
+	}
+	return 480
+}

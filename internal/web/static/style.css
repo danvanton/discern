@@ -1,4 +1,4 @@
-/* Discern: one small stylesheet, light and dark. */
+/* Discern: one small stylesheet, light and dark, phone first (decision D22). */
 
 :root {
   --bg: #f6f7f9;
@@ -12,7 +12,7 @@
   --ask: #b7791f;
   --busy: #2d6cdf;
   --off: #7a8594;
-  --radius: 8px;
+  --radius: 10px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -52,10 +52,12 @@ body {
 .brand { font-weight: 700; font-size: 1.1rem; color: var(--text); text-decoration: none; }
 .top .nav { margin-left: auto; }
 
-main { max-width: 1100px; margin: 0 auto; padding: 1rem; }
+main { max-width: 1100px; margin: 0 auto; padding: 0.75rem; }
 
-h1 { font-size: 1.4rem; margin: 0.25rem 0 1rem; }
+h1 { font-size: 1.4rem; margin: 0.25rem 0; line-height: 1.25; }
 h2 { font-size: 1.05rem; margin: 0 0 0.75rem; }
+h2.section { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 1.5rem 0 0.5rem; }
+p { margin: 0.25rem 0; }
 
 a { color: var(--accent); }
 
@@ -66,8 +68,9 @@ a { color: var(--accent); }
   padding: 1rem;
   margin-bottom: 1rem;
 }
-
 .panel.ask { border-color: var(--ask); }
+details.panel > summary { cursor: pointer; font-weight: 600; }
+details.panel[open] > summary { margin-bottom: 0.75rem; }
 
 .muted { color: var(--muted); }
 .small { font-size: 0.85rem; }
@@ -82,13 +85,104 @@ a { color: var(--accent); }
 
 .note { white-space: pre-wrap; }
 
+/* Job cards: the poster on the left, the words on the right. The whole card
+   is the link, so it is a big target on a phone. */
+.card {
+  display: flex;
+  gap: 0.9rem;
+  align-items: flex-start;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  color: inherit;
+  text-decoration: none;
+}
+a.card:hover { border-color: var(--accent); }
+.card.busy { border-left-color: var(--busy); }
+.card.ask { border-left-color: var(--ask); }
+.card.bad { border-left-color: var(--bad); }
+.card.ok { border-left-color: var(--ok); }
+.card-body { flex: 1; min-width: 0; }
+.card-title { font-weight: 700; font-size: 1.05rem; line-height: 1.3; overflow-wrap: anywhere; }
+.card form { margin-top: 0.5rem; }
+.doing { font-weight: 600; }
+
+.poster {
+  flex: none;
+  width: 72px;
+  height: 108px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--line);
+}
+.poster.none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.drives { display: grid; gap: 1rem; }
+.drive-name { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.3rem; }
+
+.recent ul { list-style: none; padding: 0; margin: 0; }
+.recent li a {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas: "poster name ago" "poster state state";
+  column-gap: 0.75rem;
+  align-items: center;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+  color: inherit;
+  text-decoration: none;
+}
+.recent li a:hover .recent-name { color: var(--accent); }
+.recent .poster { grid-area: poster; width: 36px; height: 54px; font-size: 1rem; }
+.recent-name { grid-area: name; font-weight: 600; overflow-wrap: anywhere; }
+.recent-state { grid-area: state; font-size: 0.85rem; }
+.recent-state.ok { color: var(--ok); }
+.recent-state.bad { color: var(--bad); }
+.recent-state.off { color: var(--off); }
+.recent li a > .muted { grid-area: ago; }
+
+/* The job page */
+.job-head { display: flex; gap: 1rem; align-items: flex-start; margin: 0.5rem 0 1rem; }
+.job-head .poster { width: 104px; height: 156px; }
+
+.steps { list-style: none; padding: 0; margin: 0.5rem 0 0.75rem; }
+.steps li { padding: 0.2rem 0 0.2rem 1.6rem; position: relative; }
+.steps li::before { position: absolute; left: 0; width: 1.2rem; text-align: center; }
+.steps li.done::before { content: "✓"; color: var(--ok); }
+.steps li.now { font-weight: 600; }
+.steps li.now::before { content: "●"; color: var(--busy); }
+.steps li.next { color: var(--muted); }
+.steps li.next::before { content: "○"; }
+.steps li.failed { color: var(--bad); font-weight: 600; }
+.steps li.failed::before { content: "✗"; }
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem 1rem;
+  margin: 0.75rem 0 0;
+}
+.stats div { display: flex; flex-direction: column; }
+.stats dt { font-size: 0.8rem; color: var(--muted); }
+.stats dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.verdict.healthy { color: var(--ok); }
+.verdict.stalled, .verdict.hung { color: var(--bad); }
+
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { font-size: 0.85rem; color: var(--muted); font-weight: 600; }
 tr.chosen td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-
 /* Wide tables scroll inside their panel rather than the page. */
-.panel { overflow-x: auto; }
+.table-scroll, form.panel { overflow-x: auto; }
 
 .badge {
   display: inline-block;
@@ -109,7 +203,7 @@ progress.bar {
   width: 100%;
   min-width: 8rem;
   height: 8px;
-  margin-top: 0.4rem;
+  margin: 0.4rem 0;
   border: 0;
   border-radius: 999px;
   overflow: hidden;
@@ -121,17 +215,13 @@ progress.bar::-webkit-progress-bar { background: var(--line); }
 progress.bar::-webkit-progress-value { background: var(--busy); }
 progress.bar::-moz-progress-bar { background: var(--busy); }
 
-.drives { list-style: none; padding: 0; margin: 0 0 0.5rem; display: flex; flex-wrap: wrap; gap: 0.75rem; }
-.drives li { display: flex; align-items: center; gap: 0.5rem; }
-.drives form { margin: 0; }
-
-.checks { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 1rem; }
+.checks { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
 .checks .ok strong { color: var(--ok); }
 .checks .bad strong { color: var(--bad); }
 
 .events { padding-left: 1.25rem; margin: 0; }
 
-.actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
 .actions form { margin: 0; }
 
 label, .field { font-weight: 600; margin-right: 0.5rem; }
@@ -145,16 +235,20 @@ input, select, button {
   background: var(--panel);
   padding: 0.35rem 0.7rem;
 }
-button { cursor: pointer; }
+/* Big enough to hit with a thumb. */
+button { cursor: pointer; min-height: 2.5rem; padding: 0.45rem 1rem; }
 button:hover { border-color: var(--accent); }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.danger { color: var(--bad); border-color: var(--bad); }
 
 form.panel button.primary { margin-top: 1rem; }
 
-@media (max-width: 640px) {
-  main { padding: 0.75rem; }
-  th, td { padding: 0.35rem; }
+/* Wider screens: drives side by side, more room for the numbers. */
+@media (min-width: 720px) {
+  main { padding: 1rem; }
+  .drives { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  .stats { grid-template-columns: repeat(5, auto); justify-content: start; }
+  .job-head .poster { width: 128px; height: 192px; }
 }
 
 /* Settings page */

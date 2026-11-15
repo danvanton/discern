@@ -35,15 +35,26 @@ var ErrUnsupported = errors.New("optical drive control needs Linux")
 
 // Tracker counts tray changes per drive. Something that scanned a disc can
 // note the count, and later know the disc can't have been swapped if the
-// count hasn't moved. It is safe for concurrent use.
+// count hasn't moved. It also keeps the last state seen, for the dashboard.
+// It is safe for concurrent use.
 type Tracker struct {
 	mu    sync.Mutex
 	gen   map[string]uint64
 	known map[string]bool
+	state map[string]State
 }
 
 func NewTracker() *Tracker {
-	return &Tracker{gen: map[string]uint64{}, known: map[string]bool{}}
+	return &Tracker{gen: map[string]uint64{}, known: map[string]bool{}, state: map[string]State{}}
+}
+
+// State returns the last state the watcher read for drive: Unknown before
+// the first read, while the drive can't be read, and on systems where
+// drives can't be watched.
+func (t *Tracker) State(drive string) State {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.state[drive]
 }
 
 // Generation returns how many changes drive has seen, and whether the count
@@ -55,13 +66,14 @@ func (t *Tracker) Generation(drive string) (uint64, bool) {
 	return t.gen[drive], t.known[drive]
 }
 
-func (t *Tracker) observe(drive string, changed bool) {
+func (t *Tracker) observe(drive string, s State, changed bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if changed {
 		t.gen[drive]++
 	}
 	t.known[drive] = true
+	t.state[drive] = s
 }
 
 // Watcher polls drives and calls OnDisc when a disc becomes ready in one.
@@ -110,13 +122,13 @@ func (w *Watcher) Run(ctx context.Context) {
 				last[d] = Unknown
 				// While a drive can't be read, a swap could go unseen.
 				if w.Tracker != nil {
-					w.Tracker.observe(d, true)
+					w.Tracker.observe(d, Unknown, true)
 				}
 				continue
 			}
 			delete(lastErr, d)
 			if w.Tracker != nil {
-				w.Tracker.observe(d, !first && s != last[d])
+				w.Tracker.observe(d, s, !first && s != last[d])
 			}
 			if s == DiscOK && last[d] != DiscOK && !first {
 				w.Log.Info("disc inserted", "drive", d)
