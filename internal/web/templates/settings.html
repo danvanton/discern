@@ -1,7 +1,7 @@
 {{define "title"}}Settings · Discern{{end}}
 
 {{define "content"}}
-<p><a href="/">← All jobs</a></p>
+<p><a href="/" class="button">← All jobs</a></p>
 <h1>Settings</h1>
 {{if .Error}}<p class="alert" role="alert">{{.Error}}</p>{{end}}
 {{if .Ignored}}<p class="saved" role="status">Saved. MakeMKV's default selection is on, so the ticked languages were not saved. Choose "Only the languages chosen below" to use them.</p>

@@ -437,6 +437,20 @@ func TestDiagnosticsDownload(t *testing.T) {
 	}
 }
 
+// Settings and the way back to all jobs are buttons, not bare links.
+func TestNavigationLooksLikeButtons(t *testing.T) {
+	srv := newServer(t, newBackend())
+	for _, page := range []string{"/", "/jobs/1", "/settings"} {
+		_, body := get(t, srv, page)
+		if !strings.Contains(body, `<a href="/settings" class="nav button">Settings</a>`) {
+			t.Errorf("%s: the Settings link isn't a button", page)
+		}
+		if page != "/" && !strings.Contains(body, `<a href="/" class="button">← All jobs</a>`) {
+			t.Errorf("%s: the way back isn't a button", page)
+		}
+	}
+}
+
 // Posters come from Discern's cache, behind the login (decision D23).
 func TestPosters(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "603.png")
