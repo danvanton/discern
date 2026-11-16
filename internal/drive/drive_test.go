@@ -139,3 +139,40 @@ func TestTrackerKeepsTheLastState(t *testing.T) {
 		t.Errorf("after a failed read: %v; want unknown", s)
 	}
 }
+
+// A disc leaving the drive (the tray opens, or it reads as closed and
+// empty) is reported once per removal, and also at the first read, so a
+// disc taken out while Discern wasn't running is noticed (decision D58).
+func TestARemovedDiscIsReported(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		states []State
+		want   int
+	}{
+		{"open, then shut empty, counts once", []State{DiscOK, TrayOpen, TrayOpen, NoDisc, NoDisc}, 1},
+		{"two removals", []State{DiscOK, TrayOpen, DiscOK, DiscOK, NoDisc}, 2},
+		{"open at start", []State{TrayOpen, TrayOpen, DiscOK}, 1},
+		{"empty at start", []State{NoDisc, NoDisc}, 1},
+		{"a disc throughout", []State{DiscOK, NotReady, DiscOK}, 0},
+	} {
+		sc := &script{states: c.states}
+		ctx, cancel := context.WithCancel(context.Background())
+		var mu sync.Mutex
+		removed := 0
+		w := &Watcher{Drives: []string{"/dev/sr0"}, Every: time.Millisecond, Status: sc.status,
+			OnDisc:    func(context.Context, string) {},
+			OnRemoved: func(context.Context, string) { mu.Lock(); removed++; mu.Unlock() },
+			Log:       slog.New(slog.NewTextHandler(io.Discard, nil))}
+		go w.Run(ctx)
+		deadline := time.Now().Add(5 * time.Second)
+		for !sc.done() && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+		mu.Lock()
+		if removed != c.want {
+			t.Errorf("%s: OnRemoved ran %d times, want %d", c.name, removed, c.want)
+		}
+		mu.Unlock()
+	}
+}

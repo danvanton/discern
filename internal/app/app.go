@@ -169,12 +169,19 @@ func (a *App) DiscInserted(ctx context.Context, drive string) (*jobs.Job, error)
 }
 
 // OnDisc is DiscInserted for the drive watcher, which has nobody to return
-// an error to. A disc that goes in while the drive still has a job (one
-// waiting for approval, say) is remembered, and gets its job when the drive
-// frees up: the watcher only reports changes, so it won't report this disc
-// again.
+// an error to. A disc that goes in while the drive's job waits for approval
+// replaces that job (decision D58). One that goes in while the drive's job
+// is further on (ripping, say) is remembered, and gets its job when the
+// drive frees up: the watcher only reports changes, so it won't report this
+// disc again.
 func (a *App) OnDisc(ctx context.Context, drive string) {
 	_, err := a.DiscInserted(ctx, drive)
+	// A disc went in, so a job waiting for approval lost its disc, even if
+	// the tray was swapped between two polls and never read as open
+	// (decision D58): the new disc takes the drive.
+	if errors.Is(err, jobs.ErrDriveBusy) && a.withdrawWaiting(ctx, drive, "another disc went in") {
+		_, err = a.DiscInserted(ctx, drive)
+	}
 	if errors.Is(err, jobs.ErrDriveBusy) {
 		a.mu.Lock()
 		a.pending[drive] = true
@@ -185,6 +192,46 @@ func (a *App) OnDisc(ctx context.Context, drive string) {
 	if err != nil {
 		a.log.Warn("not starting a job", "drive", drive, "err", err)
 	}
+}
+
+// OnDiscRemoved is the drive watcher's report that a drive has no disc: its
+// tray opened, or it reads as empty, also at start. The drive's job, if it
+// is waiting for approval, is cancelled, and the next disc to go in starts
+// afresh (decision D58). A disc that was waiting for the drive (Pending) is
+// gone too. A job in any other state is left to its step: a scan reports
+// the disc it couldn't read (the tray isn't always locked while MakeMKV
+// reads: it was opened during a scan on the homelab), and a rip checks its
+// disc before it starts.
+func (a *App) OnDiscRemoved(ctx context.Context, drive string) {
+	a.mu.Lock()
+	delete(a.pending, drive)
+	a.mu.Unlock()
+	a.withdrawWaiting(ctx, drive, "the disc was taken out")
+}
+
+// withdrawWaiting cancels drive's job if it is waiting for approval, with
+// reason as its note, and reports whether it did.
+func (a *App) withdrawWaiting(ctx context.Context, drive, reason string) bool {
+	active, err := a.store.ActiveJobs(ctx)
+	if err != nil {
+		a.log.Warn("the jobs can't be read", "drive", drive, "err", err)
+		return false
+	}
+	withdrawn := false
+	for _, j := range active {
+		if j.Drive != drive || j.State != jobs.NeedsYou {
+			continue
+		}
+		ok, err := a.engine.Withdraw(ctx, j.ID, reason)
+		switch {
+		case err != nil:
+			a.log.Warn("the waiting job couldn't be cancelled", "job", j.ID, "drive", drive, "err", err)
+		case ok:
+			a.log.Info("waiting job cancelled", "job", j.ID, "drive", drive, "reason", reason)
+			withdrawn = true
+		}
+	}
+	return withdrawn
 }
 
 // Approve starts the rip of the chosen titles. langs, if not nil, is this

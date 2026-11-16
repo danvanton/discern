@@ -233,7 +233,7 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("resuming jobs: %w", err)
 	}
 
-	watcher := &drive.Watcher{Drives: cfg.Drives, Every: cfg.DrivePoll, OnDisc: a.OnDisc, Tracker: tracker, Log: log}
+	watcher := &drive.Watcher{Drives: cfg.Drives, Every: cfg.DrivePoll, OnDisc: a.OnDisc, OnRemoved: a.OnDiscRemoved, Tracker: tracker, Log: log}
 	go watcher.Run(ctx)
 
 	handler, err := web.New(a, web.Options{

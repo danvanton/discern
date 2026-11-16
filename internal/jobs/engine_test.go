@@ -241,6 +241,100 @@ func TestSelectSavesTheDecisionAndFillsTheMovie(t *testing.T) {
 	}
 }
 
+// Withdraw cancels a job only while it waits for the user (decision D58),
+// with the reason in its history.
+func TestWithdrawCancelsOnlyAWaitingJob(t *testing.T) {
+	e := newEnv(t, &fakeSteps{})
+	j, _ := e.store.CreateJob(ctx, "/dev/sr0")
+	if ok, err := e.engine.Withdraw(ctx, j.ID, "the disc was taken out"); ok || err != nil {
+		t.Errorf("withdrew a job that isn't waiting yet: %v, %v", ok, err)
+	}
+	if err := e.engine.Run(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := e.engine.Withdraw(ctx, j.ID, "the disc was taken out")
+	if !ok || err != nil || e.state(t, j.ID) != jobs.Cancelled {
+		t.Fatalf("withdraw: %v, %v; state %s", ok, err, e.state(t, j.ID))
+	}
+	events, _ := e.store.Events(ctx, j.ID)
+	if last := events[len(events)-1]; last.Note != "the disc was taken out" {
+		t.Errorf("history note %q", last.Note)
+	}
+
+	done := newEnv(t, &fakeSteps{auto: true})
+	d, _ := done.store.CreateJob(ctx, "/dev/sr0")
+	if err := done.engine.Run(ctx, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := done.engine.Withdraw(ctx, d.ID, "x"); ok || err != nil || done.state(t, d.ID) != jobs.Done {
+		t.Errorf("a finished job: %v, %v, %s", ok, err, done.state(t, d.ID))
+	}
+}
+
+// An approval racing a removal: whichever lands first wins, and an approved
+// job is never left in Ripping with nothing running it (Withdraw doesn't
+// take the run slot). Run with -race in CI.
+func TestWithdrawRacingAnApproval(t *testing.T) {
+	for i := 0; i < 30; i++ {
+		e := newEnv(t, &fakeSteps{})
+		j, _ := e.store.CreateJob(ctx, "/dev/sr0")
+		if err := e.engine.Run(ctx, j.ID); err != nil {
+			t.Fatal(err)
+		}
+		withdrawn := make(chan bool)
+		go func() {
+			ok, _ := e.engine.Withdraw(ctx, j.ID, "the disc was taken out")
+			withdrawn <- ok
+		}()
+		approveErr := e.engine.Approve(ctx, j.ID, []int{0}, nil, nil)
+		if approveErr == nil {
+			if err := e.engine.Run(ctx, j.ID); err != nil {
+				t.Fatalf("round %d: the approved job couldn't run: %v", i, err)
+			}
+		}
+		ok := <-withdrawn
+		switch st := e.state(t, j.ID); {
+		case ok && approveErr == nil:
+			t.Fatalf("round %d: both the removal and the approval won", i)
+		case ok && st != jobs.Cancelled, !ok && st != jobs.Done:
+			t.Fatalf("round %d: withdrawn %v, approve %v, state %s", i, ok, approveErr, st)
+		}
+	}
+}
+
+// staleStore hands out a copy of a job read earlier, as if another writer
+// moved the job between Withdraw's read and its move.
+type staleStore struct {
+	jobs.Store
+	stale *jobs.Job
+}
+
+func (s staleStore) Job(context.Context, int64) (*jobs.Job, error) {
+	j := *s.stale
+	return &j, nil
+}
+
+// Withdraw loses the compare-and-swap to an approval that moved the job
+// first: it reports false and leaves the job as the approval left it.
+func TestWithdrawLosesToAnEarlierApproval(t *testing.T) {
+	e := newEnv(t, &fakeSteps{})
+	j, _ := e.store.CreateJob(ctx, "/dev/sr0")
+	if err := e.engine.Run(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	waiting, _ := e.store.Job(ctx, j.ID)
+	if err := e.engine.Approve(ctx, j.ID, []int{0}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	stale := jobs.NewEngine(staleStore{Store: e.store, stale: waiting}, e.steps, e.stage, nil)
+	if ok, err := stale.Withdraw(ctx, j.ID, "the disc was taken out"); ok || err != nil {
+		t.Errorf("withdraw after the approval: %v, %v", ok, err)
+	}
+	if st := e.state(t, j.ID); st != jobs.Ripping {
+		t.Errorf("state %s, want ripping", st)
+	}
+}
+
 func TestFailedStepIsRecordedAndRetryResumesThere(t *testing.T) {
 	steps := &fakeSteps{auto: true, failIn: "verify"}
 	e := newEnv(t, steps)

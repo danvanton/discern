@@ -319,6 +319,30 @@ func (e *Engine) Cancel(ctx context.Context, id int64) error {
 	}
 }
 
+// Withdraw cancels a job that is waiting for the user because its disc was
+// taken out (decision D58), with note as the reason. It reports whether it
+// did: a job in any other state is left alone, since a rip checks its disc
+// itself. A waiting job is never being run, so Withdraw doesn't take the
+// job's run slot (an approval's run must be able to start at once); the
+// move is a compare-and-swap from NeedsYou, so an approval that lands first
+// wins.
+func (e *Engine) Withdraw(ctx context.Context, id int64, note string) (bool, error) {
+	j, err := e.store.Job(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if j.State != NeedsYou {
+		return false, nil
+	}
+	if err := e.cancel(ctx, j, note); err != nil {
+		if errors.Is(err, ErrConflict) {
+			return false, nil // approved meanwhile
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // cancelIdle cancels a job nobody is running.
 func (e *Engine) cancelIdle(ctx context.Context, id int64) error {
 	j, err := e.store.Job(ctx, id)
@@ -328,11 +352,17 @@ func (e *Engine) cancelIdle(ctx context.Context, id int64) error {
 	if j.State.Terminal() {
 		return fmt.Errorf("job %d is already %s", id, j.State)
 	}
-	j.Failure = keepBundle(j.Failure)
-	if err := e.move(ctx, j, Cancelled, "cancelled by user"); err != nil {
+	return e.cancel(ctx, j, "cancelled by user")
+}
+
+// cancel moves j to Cancelled with reason as its note, keeping only a
+// diagnostics bundle of any failure, and removes its staging folder.
+func (e *Engine) cancel(ctx context.Context, j *Job, reason string) error {
+	j.Failure, j.Note = keepBundle(j.Failure), reason
+	if err := e.move(ctx, j, Cancelled, reason); err != nil {
 		return err
 	}
-	e.removeStaging(id)
+	e.removeStaging(j.ID)
 	return nil
 }
 

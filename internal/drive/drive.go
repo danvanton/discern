@@ -85,6 +85,12 @@ type Watcher struct {
 	// OnDisc is called, on the watcher's goroutine, when a drive goes from
 	// any other state to DiscOK.
 	OnDisc func(ctx context.Context, device string)
+	// OnRemoved, if set, is called, on the watcher's goroutine, when a
+	// drive goes from holding a disc (or an unknown state) to having none:
+	// its tray opens, or it reads as closed and empty (decision D58). Unlike
+	// OnDisc, it is also called at the first read, so a disc taken out while
+	// Discern wasn't running is noticed at start.
+	OnRemoved func(ctx context.Context, device string)
 	// Tracker, if set, is told about every change of every drive.
 	Tracker *Tracker
 	Log     *slog.Logger
@@ -134,6 +140,10 @@ func (w *Watcher) Run(ctx context.Context) {
 				w.Log.Info("disc inserted", "drive", d)
 				w.OnDisc(ctx, d)
 			}
+			if empty(s) && (first || !empty(last[d])) && w.OnRemoved != nil {
+				w.Log.Info("no disc in the drive", "drive", d, "state", s)
+				w.OnRemoved(ctx, d)
+			}
 			last[d] = s
 		}
 		first = false
@@ -144,3 +154,7 @@ func (w *Watcher) Run(ctx context.Context) {
 		}
 	}
 }
+
+// empty reports whether a drive in state s holds no disc: its tray is open,
+// or it is closed and empty.
+func empty(s State) bool { return s == TrayOpen || s == NoDisc }

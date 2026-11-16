@@ -240,15 +240,19 @@ func TestEjectOnlyWhenDone(t *testing.T) {
 	}
 }
 
-// A disc that goes in while the drive still has a job is remembered, and gets
-// its own job once the drive is free.
+// A disc that goes in while the drive's job is ripping is remembered, and
+// gets its own job once the drive is free.
 func TestADiscInsertedWhileBusyStartsLater(t *testing.T) {
-	w := newWorld(t, 0, "")
+	w := newWorld(t, 200, "") // a slow rip
 	ctx := context.Background()
 	first, _ := w.app.DiscInserted(ctx, "/dev/sr0")
-	w.waitFor(t, first.ID, jobs.NeedsYou)
+	waiting := w.waitFor(t, first.ID, jobs.NeedsYou)
+	if err := w.app.Approve(ctx, first.ID, waiting.Titles, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	w.waitFor(t, first.ID, jobs.Ripping)
 
-	w.app.OnDisc(ctx, "/dev/sr0") // the user swaps in the next disc
+	w.app.OnDisc(ctx, "/dev/sr0") // the next disc goes in
 	if !w.app.Pending("/dev/sr0") {
 		t.Fatal("the new disc wasn't remembered")
 	}
@@ -267,6 +271,84 @@ func TestADiscInsertedWhileBusyStartsLater(t *testing.T) {
 		t.Fatalf("active jobs = %v, want one new job", active)
 	}
 	w.waitFor(t, active[0].ID, jobs.NeedsYou)
+}
+
+// A drive with no disc cancels its job waiting for approval, with the
+// reason as the job's note, and forgets a disc that was waiting for the
+// drive; the next disc in starts afresh (decision D58).
+func TestARemovedDiscCancelsAWaitingJob(t *testing.T) {
+	w := newWorld(t, 0, "")
+	ctx := context.Background()
+	first, _ := w.app.DiscInserted(ctx, "/dev/sr0")
+	w.waitFor(t, first.ID, jobs.NeedsYou)
+
+	w.app.OnDiscRemoved(ctx, "/dev/sr0")
+	j, _ := w.store.Job(ctx, first.ID)
+	if j.State != jobs.Cancelled || j.Note != "the disc was taken out" {
+		t.Errorf("the waiting job is %s, note %q", j.State, j.Note)
+	}
+	if active, _ := w.store.ActiveJobs(ctx); len(active) != 0 {
+		t.Fatalf("%d active jobs after the disc came out, want none", len(active))
+	}
+
+	w.app.OnDisc(ctx, "/dev/sr0") // the disc goes back in
+	active, _ := w.store.ActiveJobs(ctx)
+	if len(active) != 1 || active[0].ID == first.ID {
+		t.Fatalf("active jobs = %v, want one new job", active)
+	}
+	w.waitFor(t, active[0].ID, jobs.NeedsYou)
+
+	// Another drive's removal doesn't touch this job.
+	w.app.OnDiscRemoved(ctx, "/dev/sr1")
+	if j, _ := w.store.Job(ctx, active[0].ID); j.State != jobs.NeedsYou {
+		t.Errorf("another drive's removal changed the job to %s", j.State)
+	}
+}
+
+// A disc swapped between two polls (the tray never read as open) replaces
+// the job waiting for approval at once (decision D58).
+func TestASwappedDiscReplacesAWaitingJob(t *testing.T) {
+	w := newWorld(t, 0, "")
+	ctx := context.Background()
+	first, _ := w.app.DiscInserted(ctx, "/dev/sr0")
+	w.waitFor(t, first.ID, jobs.NeedsYou)
+
+	w.app.OnDisc(ctx, "/dev/sr0")
+	if j, _ := w.store.Job(ctx, first.ID); j.State != jobs.Cancelled || j.Note != "another disc went in" {
+		t.Errorf("the waiting job is %s, note %q", j.State, j.Note)
+	}
+	if w.app.Pending("/dev/sr0") {
+		t.Error("the new disc was queued instead of started")
+	}
+	active, _ := w.store.ActiveJobs(ctx)
+	if len(active) != 1 || active[0].ID == first.ID {
+		t.Fatalf("active jobs = %v, want one new job", active)
+	}
+	w.waitFor(t, active[0].ID, jobs.NeedsYou)
+}
+
+// A disc queued behind a ripping job is forgotten when the drive reads
+// empty: it came out with the tray.
+func TestARemovedDiscForgetsAQueuedDisc(t *testing.T) {
+	w := newWorld(t, 200, "") // a slow rip
+	ctx := context.Background()
+	first, _ := w.app.DiscInserted(ctx, "/dev/sr0")
+	waiting := w.waitFor(t, first.ID, jobs.NeedsYou)
+	if err := w.app.Approve(ctx, first.ID, waiting.Titles, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	w.waitFor(t, first.ID, jobs.Ripping)
+	w.app.OnDisc(ctx, "/dev/sr0")
+	if !w.app.Pending("/dev/sr0") {
+		t.Fatal("the disc wasn't queued behind the rip")
+	}
+	w.app.OnDiscRemoved(ctx, "/dev/sr0")
+	if w.app.Pending("/dev/sr0") {
+		t.Error("the disc that came out is still queued")
+	}
+	if j, _ := w.store.Job(ctx, first.ID); j.State != jobs.Ripping {
+		t.Errorf("the ripping job is %s; it is left to its own disc check", j.State)
+	}
 }
 
 func TestHealthReportsWhatIsBroken(t *testing.T) {
