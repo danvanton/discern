@@ -2,13 +2,14 @@
 
 Discern watches optical drives, works out which titles on a disc are the movie, rips them with MakeMKV (`makemkvcon`, run as a subprocess) and imports them into Radarr. It is written in Go 1.27 and is a single binary with a web UI.
 
-The design, every decision (D1–D37) and the reason for each are in `docs/DESIGN.md`. Read the relevant section before changing a part. When a change alters behaviour the design describes, update the design doc in the same change. New decisions get the next D-number in the decision log (section 17), marked Proposed until the owner accepts them.
+The design, every decision (D1–D41) and the reason for each are in `docs/DESIGN.md`. Read the relevant section before changing a part. When a change alters behaviour the design describes, update the design doc in the same change. New decisions get the next D-number in the decision log (section 17), marked Proposed until the owner accepts them.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
 | `cmd/discern` | the server: reads settings, wires the parts, shuts down within Docker's 10 s |
+| `cmd/discern-index` | builds the compact TheDiscDB index from a TheDiscDB checkout (decision D38) |
 | `cmd/fake-makemkvcon`, `cmd/fake-radarr` | stand-ins for running the app without a drive or Radarr (README: "Try it without a drive") |
 | `internal/makemkv` | robot-output parser, the runner (`Info`, `Rip`) and the rip watchdog; the only package that knows MakeMKV |
 | `internal/makemkv/fake` | the fake makemkvcon (scenarios in the `FAKE_MAKEMKVCON` JSON variable) |
@@ -18,6 +19,7 @@ The design, every decision (D1–D37) and the reason for each are in `docs/DESIG
 | `internal/steps` | the real `jobs.Steps`: scan, check disc, select, rip, verify, import |
 | `internal/radarr` | Radarr v3 API client; `radarrtest` is an in-memory fake Radarr |
 | `internal/importer` | Radarr import flow and the staging `PathMap` |
+| `internal/discdb` | TheDiscDB's movie discs as a compact index; matching a scan to a known disc by shape (D39) |
 | `internal/identify` | disc label cleaning for the movie lookup |
 | `internal/drive` | Linux tray status and eject (ioctls), the watcher and the tray-change tracker |
 | `internal/app` | runtime glue: starts and resumes jobs, ejects, health |
@@ -27,7 +29,8 @@ The design, every decision (D1–D37) and the reason for each are in `docs/DESIG
 | `internal/lang` | language codes and names; `Canonical` turns ISO 639-2/T codes (`fra`) into /B (`fre`) |
 | `internal/poster` | poster fetching and the cache in `/config/posters` (decisions D23, D31) |
 | `internal/settings` | the Settings page's values (eject, languages); stored by `internal/store` |
-| `testdata/makemkv` | robot-output scans used by tests and the demo |
+| `testdata/makemkv` | robot-output scans used by tests and the demo, and two real UHD scans from the homelab (JSON) |
+| `testdata/discdb` | a few TheDiscDB records (MIT), track lists removed, for the `discdb` tests |
 | `Dockerfile`, `deploy/` | the image, and the compose example with its notes |
 | `scripts/update-makemkv-pin.sh` | pins a MakeMKV release after checking its signature; the weekly workflow runs it |
 | `.github/workflows` | CI, the release (tag → signed multi-arch image), the MakeMKV update check |

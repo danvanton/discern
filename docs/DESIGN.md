@@ -1,6 +1,6 @@
 # Discern: design
 
-**Status:** draft, 2026-11-13. Decisions D1–D26 were accepted by the owner on 2026-11-13 and 14, and D27 to D37 on 2026-11-15 and 16. A new decision starts as **Proposed** and becomes **Accepted** once the owner approves it. The decision log (section 17) holds the reasons.
+**Status:** draft, 2026-11-13. Decisions D1–D26 were accepted by the owner on 2026-11-13 and 14, and D27 to D41 on 2026-11-15 and 16. A new decision starts as **Proposed** and becomes **Accepted** once the owner approves it. The decision log (section 17) holds the reasons.
 
 Discern turns a disc in a drive into a correctly named file in your library, with no clicks when it is sure and one question when it is not. It runs MakeMKV, works out which titles on the disc are the movie or the episodes, rips only those, and hands them to Radarr or Sonarr, or files them itself.
 
@@ -75,7 +75,7 @@ Attribute numbers come from `apdefs.h` in the open-source `makemkv-oss` package.
 
 **MakeMKV's own main-feature guess.** On fake-playlist discs MakeMKV can run the disc's Java menu and mark the title the menu would play. The output file name then contains `SEG_MainFeature`. It needs a Java runtime in the container, and it is a strong hint, not proof.
 
-**TheDiscDB.** A community, MIT-licensed catalogue of specific disc releases. For each disc it lists every title MakeMKV shows, with its playlist file, segment map, duration and size, and says what each title is (`MainMovie`, `Episode`, `Extra`, ...). It also stores a `ContentHash` per disc. 3,114 movie discs and 255 series are in the dataset today. This lets you identify a disc **by its shape** (which playlists, how long), which is far more reliable than its label.
+**TheDiscDB.** A community, MIT-licensed catalogue of specific disc releases. For each disc it lists every title MakeMKV shows, with its playlist file, segment map, duration and size, and says what each title is (`MainMovie`, `Episode`, `Extra`, ...). It also stores a `ContentHash` per disc. 3,114 movie discs and 255 series are in the dataset today. The repository is laid out as `data/movie/<Title (Year)>/<release>/discNN.json`, with the movie's TMDb id in the folder's `metadata.json` (`ExternalIds.Tmdb`). Each title has `SourceFile`, `SegmentMap`, `Duration`, `Size` and, when someone classified it, `Item.Type` (`MainMovie`, ...) and `Item.Title`, which names cuts ("Alien Director's Cut"). A disc can list two `MainMovie` titles, one per cut. The repository is about 1.6 GB with its images and history. This lets you identify a disc **by its shape** (which playlists, how long), which is far more reliable than its label.
 
 **Radarr/Sonarr Manual Import.** The API the web UI's "Manual Import" button uses: scan a folder (`GET /api/v3/manualimport?folder=…`), then send a `ManualImport` command naming the movie (or episodes), the quality and `importMode: move`. Radarr then renames and files the file by its own rules. That keeps naming in one place, the user's \*arr settings.
 
@@ -325,6 +325,12 @@ This is the part that makes Discern worth using. The selector collects **evidenc
 - **Lookalikes.** Several titles within a few minutes of each other that use the same clips in a different order mean a fake-playlist disc. The longest-title rule is then switched off.
 - **Duplicates.** Same duration (±0.5 s) and size (±0.1 %) means the same video through another playlist. Keep one.
 - **Play-all.** A title whose segment map is the others joined together. Not an episode, not the movie.
+
+**Where TheDiscDB's data comes from** (decision D38). A workflow in Discern's repository pulls TheDiscDB's data every day, keeps only the fields the selector needs (no images, no track lists), and publishes the result as a compressed index of a few MB with its SHA-256, crediting TheDiscDB under its MIT licence. Discern downloads it at start and once a day into `/config/discdb/`, checks the checksum and the contents, and keeps the last good copy: offline, it uses what it has, and a bad download is never used.
+
+**Matching a disc** (decision D39) is by shape, from the scan alone: a known disc matches when nearly all its titles line up with the scan's by playlist file, segment map, length and size, and nearly all the scan's long titles line up with it. Playlist files and segment maps survive MakeMKV numbering titles differently. ContentHash may confirm a match later (open question 1).
+
+**Two cuts** (decision D41). When the matched disc lists two `MainMovie` titles, the selector holds for the user with both named from TheDiscDB ("Theatrical Release", "Director's Cut"). It never picks a cut on its own; the cut picker builds on this.
 
 **Output:**
 
@@ -640,6 +646,10 @@ Recordings come from real discs. When a disc behaves oddly in real use, its scan
 | D35 | **MakeMKV's messages from a failed step are kept on the job**: the run's last 50, as JSON with the failure, known error codes marked | Accepted (2026-11-16) | Saved in the same write that marks the job failed, so the page and the database agree, and they go when the job does. Fifty is enough to see what led up to the failure and short enough for a phone; texts come from the disc, so each is bounded. MakeMKV's flags field is 0 on every recorded message, so errors are marked by the codes Discern knows. | A table with one row per message (queryable across jobs, more code for the same page); a text file per job in /config (no migration, but files to clean up); errors only (shorter, but loses the context); everything, capped at 500 (long, mostly routine lines) |
 | D36 | **The engine records a failure kind**, and the page turns it into plain words and a next step | Accepted (2026-11-16) | Errors say what they are (an optional `FailKind` method), so a reworded message never changes the page; any other error is named by its step. | The page matching the note's text (breaks silently when a message is reworded); the note as it is, with the messages folded under it (least work, technical wording) |
 | D37 | **The watchdog's diagnostics bundle is saved** under `/config/diagnostics` and **offered as a .zip** from the failure page | Accepted (2026-11-16) | The design always said it was saved (section 9.2); the code never wrote it, so a stall's evidence was lost. One download is what a MakeMKV bug report needs. | Saving it and showing the path (fetched over SSH); leaving it for v0.2 with the Backup + remux fallback (the design stays wrong until then) |
+| D38 | **TheDiscDB arrives as a compact daily index** built by Discern's own workflow and downloaded by Discern | Accepted (2026-11-16) | TheDiscDB's repository is about 1.6 GB, mostly images and history; the selector needs a few MB of it. Built daily, it is as fresh as the source; checksummed and validated, a bad copy is never used; kept on disk, Discern works offline. Refines D5. | The NAS downloading TheDiscDB's repository itself (1.6 GB each time, mostly images); the index built into each Discern release (only as fresh as the last release) |
+| D39 | **Match a disc to TheDiscDB by shape**, from the scan: playlist files, segment maps, lengths and sizes | Accepted (2026-11-16) | It uses only what MakeMKV's scan already gives, and survives MakeMKV numbering titles differently. ContentHash would be exact, but needs the disc's file list, and the container can't mount a disc. | ContentHash first (a UDF reader in Go, much more work); both at once (the largest part) |
+| D40 | **The selector and its benchmark come before auto-import**: the selector pre-selects and explains on the review page, and every disc still needs the user's approval | Accepted (2026-11-16) | The benchmark's number and some real discs should prove the selector before it acts alone. | Auto-import in the same part (one big part, unproven); only the index and title labels (no selector or benchmark yet) |
+| D41 | **Two `MainMovie` titles: ask, both named** | Accepted (2026-11-16) | Which cut to keep is the user's taste, not a fact the selector can know; naming both from TheDiscDB makes the question quick, and the cut picker builds on it. | Pick the longer cut (goes ahead alone, sometimes the wrong cut); a Settings preference for theatrical or longest (one more setting, and cut names vary) |
 
 ---
 
@@ -648,7 +658,7 @@ Recordings come from real discs. When a disc behaves oddly in real use, its scan
 | Version | Scope | Done when |
 |---|---|---|
 | **v0.1** | One drive, movies, Radarr import, manual approve for every disc, web UI with queue and Needs you, **rip watchdog** with diagnostics bundle | A real disc goes from tray to Radarr with one click; a replayed stall is caught and stopped |
-| **v0.2** | Selector with evidence and holds, benchmark + CI gate, auto-import (`off` / `trial` / `on`), metrics, **Library target for movies** (Plex and Jellyfin naming, TMDb key), **Backup + remux fallback** with strategy history | The benchmark number is in the README; trial mode has run on real discs; a movie lands in a library without Radarr; a stalled UHD rip finishes through the fallback |
+| **v0.2** | (In this order, decision D40: the TheDiscDB index and shape matching; the selector and the benchmark with its CI gate, pre-selecting on the review page; then auto-import.) Selector with evidence and holds, benchmark + CI gate, auto-import (`off` / `trial` / `on`), metrics, **Library target for movies** (Plex and Jellyfin naming, TMDb key), **Backup + remux fallback** with strategy history | The benchmark number is in the README; trial mode has run on real discs; a movie lands in a library without Radarr; a stalled UHD rip finishes through the fallback |
 | **v0.3** | TV through Sonarr with TheDiscDB episode mapping, and TV in the Library target | A TV disc imports with episodes checked |
 | **v0.4** | Editions, upgrade-replace with recycle bin, several drives, **multi-disc movies** (wait, check tracks, join) | A two-disc movie imports as one file |
 | **v1.0** | Signed multi-arch releases, user guide, Grafana dashboard, stable config | Someone else installs it from the README alone |
@@ -657,7 +667,7 @@ Recordings come from real discs. When a disc behaves oddly in real use, its scan
 
 ## 19. Open questions
 
-1. **ContentHash:** how does TheDiscDB compute it, and can Discern compute the same value from a disc without ripping? If yes, it is the fastest and surest identification. Check TheDiscDB's ImportBuddy source and Engram's implementation.
+1. ~~**ContentHash:** how does TheDiscDB compute it?~~ Answered 2026-11-16: an MD5 over the sizes of the disc's `BDMV/STREAM/*.m2ts` files (each an 8-byte little-endian integer), sorted by file name, as 32 upper-case hex (TheDiscDB's `optical-disc-manifest` specification v1, section 4.1; the retired ImportBuddy hashes sizes the same way). Discern could compute it, but only from the disc's file list, and the container may not mount a disc: it would need a UDF reader in Go. Matching by shape comes first (D39); ContentHash may follow.
 2. **Segment maps across MakeMKV versions:** do they stay stable enough to match on? Test with the recorded scans of a few discs on two MakeMKV versions.
 3. **Java in the image:** MakeMKV does use Java: `makemkv-bin` ships `blues.jar`, and `makemkvcon` looks for Java in `/usr/lib/jvm` and `/usr/bin/java` (decision D17). Still open: how much size it adds (read it from the first CI image build), and how often `SEG_MainFeature` depends on it. Scan one fake-playlist disc with and without Java on the first real run.
 4. **Contributing back:** add an opt-in "send this disc to TheDiscDB" like Engram's, or only link to their instructions (as Rexarr does)?

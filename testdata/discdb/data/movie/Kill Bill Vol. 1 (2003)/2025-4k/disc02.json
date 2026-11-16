@@ -1,0 +1,203 @@
+{
+ "Index": 2,
+ "Slug": "blu-ray",
+ "Name": "Blu-ray",
+ "Format": "Blu-Ray",
+ "ContentHash": "3A990C0A7D8906B2EFA0FF73E9E02B49",
+ "GlobalDiscId": "F44DE941A4ADF421EBEEE94FA1F79293BDFD2DF3",
+ "Titles": [
+  {
+   "Index": 0,
+   "Comment": "title.mkv",
+   "SourceFile": "00011.mpls",
+   "SegmentMap": "13,14",
+   "Duration": "0:01:35",
+   "Size": 406499328,
+   "DisplaySize": "387.6 MB"
+  },
+  {
+   "Index": 1,
+   "Comment": "title.mkv",
+   "SourceFile": "00012.mpls",
+   "SegmentMap": "15,16",
+   "Duration": "0:01:35",
+   "Size": 405970944,
+   "DisplaySize": "387.1 MB"
+  },
+  {
+   "Index": 2,
+   "Comment": "title.mkv",
+   "SourceFile": "00015.mpls",
+   "SegmentMap": "19",
+   "Duration": "0:00:04",
+   "Size": 546816,
+   "DisplaySize": "0.5 MB"
+  },
+  {
+   "Index": 3,
+   "Comment": "title.mkv",
+   "SourceFile": "00016.mpls",
+   "SegmentMap": "20",
+   "Duration": "0:00:11",
+   "Size": 2955264,
+   "DisplaySize": "2.8 MB"
+  },
+  {
+   "Index": 4,
+   "Comment": "title.mkv",
+   "SourceFile": "00001.mpls",
+   "SegmentMap": "1",
+   "Duration": "1:50:43",
+   "Size": 31489241088,
+   "DisplaySize": "29.3 GB"
+  },
+  {
+   "Index": 5,
+   "Comment": "title.mkv",
+   "SourceFile": "00014.mpls",
+   "SegmentMap": "18",
+   "Duration": "0:00:11",
+   "Size": 6352896,
+   "DisplaySize": "6.0 MB"
+  },
+  {
+   "Index": 6,
+   "Comment": "title.mkv",
+   "SourceFile": "00003.m2ts",
+   "SegmentMap": "3",
+   "Duration": "0:00:01",
+   "Size": 24576,
+   "DisplaySize": "0.0 MB"
+  },
+  {
+   "Index": 7,
+   "Comment": "title.mkv",
+   "SourceFile": "00004.m2ts",
+   "SegmentMap": "4",
+   "Duration": "0:05:51",
+   "Size": 479582208,
+   "DisplaySize": "457.3 MB",
+   "Item": {
+    "Title": "The \"5, 6, 7, 8's\" Musical Performances",
+    "Type": "Extra",
+    "Chapters": []
+   }
+  },
+  {
+   "Index": 8,
+   "Comment": "title.mkv",
+   "SourceFile": "00007.m2ts",
+   "SegmentMap": "7",
+   "Duration": "0:02:18",
+   "Size": 196712448,
+   "DisplaySize": "187.6 MB",
+   "Item": {
+    "Title": "Jackie Brown Trailer",
+    "Type": "Trailer",
+    "Chapters": []
+   }
+  },
+  {
+   "Index": 9,
+   "Comment": "title.mkv",
+   "SourceFile": "00009.m2ts",
+   "SegmentMap": "9",
+   "Duration": "0:02:33",
+   "Size": 195981312,
+   "DisplaySize": "186.9 MB",
+   "Item": {
+    "Title": "Kill Bill Vol. 1 Bootleg Trailer",
+    "Type": "Trailer",
+    "Chapters": []
+   }
+  },
+  {
+   "Index": 10,
+   "Comment": "title.mkv",
+   "SourceFile": "00010.m2ts",
+   "SegmentMap": "10",
+   "Duration": "0:00:57",
+   "Size": 68210688,
+   "DisplaySize": "65.0 MB",
+   "Item": {
+    "Title": "Kill Bill Vol. 2 Teaser",
+    "Type": "Trailer",
+    "Chapters": []
+   }
+  },
+  {
+   "Index": 11,
+   "Comment": "title.mkv",
+   "SourceFile": "00002.m2ts",
+   "SegmentMap": "2",
+   "Duration": "0:22:05",
+   "Size": 2196615168,
+   "DisplaySize": "2.0 GB",
+   "Item": {
+    "Title": "The Making of Kill Bill",
+    "Type": "Extra",
+    "Chapters": []
+   }
+  },
+  {
+   "Index": 12,
+   "Comment": "title.mkv",
+   "SourceFile": "00005.m2ts",
+   "SegmentMap": "5",
+   "Duration": "0:01:36",
+   "Size": 132593664,
+   "DisplaySize": "126.4 MB",
+   "Item": {
+    "Title": "Reservoir Dogs Trailer",
+    "Type": "Trailer",
+    "Chapters": []
+   }
+  },
+  {
+   "Index": 13,
+   "Comment": "title.mkv",
+   "SourceFile": "00006.m2ts",
+   "SegmentMap": "6",
+   "Duration": "0:02:40",
+   "Size": 233109504,
+   "DisplaySize": "222.3 MB",
+   "Item": {
+    "Title": "Pulp Fiction Trailer",
+    "Type": "Trailer",
+    "Chapters": []
+   }
+  },
+  {
+   "Index": 14,
+   "Comment": "title.mkv",
+   "SourceFile": "00012.m2ts",
+   "SegmentMap": "12",
+   "Duration": "0:00:01",
+   "Size": 36864,
+   "DisplaySize": "0.0 MB"
+  },
+  {
+   "Index": 15,
+   "Comment": "title.mkv",
+   "SourceFile": "00011.m2ts",
+   "SegmentMap": "11",
+   "Duration": "0:00:16",
+   "Size": 41705472,
+   "DisplaySize": "39.7 MB"
+  },
+  {
+   "Index": 16,
+   "Comment": "title.mkv",
+   "SourceFile": "00008.m2ts",
+   "SegmentMap": "8",
+   "Duration": "0:01:49",
+   "Size": 147111936,
+   "DisplaySize": "140.2 MB",
+   "Item": {
+    "Title": "Kill Bill Vol. 1 Teaser",
+    "Type": "Trailer",
+    "Chapters": []
+   }
+  }
+ ]
+}
