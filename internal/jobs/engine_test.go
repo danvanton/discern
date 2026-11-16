@@ -553,6 +553,53 @@ func TestARetriedRipStartsAtZeroBeforeTheDiscCheck(t *testing.T) {
 	}
 }
 
+// A failed step is saved with its description for the failure page, and
+// Retry clears it (decision D36).
+func TestAFailureIsDescribedAndRetryClearsIt(t *testing.T) {
+	steps := &fakeSteps{auto: true, failIn: "rip"}
+	e := newEnv(t, steps)
+	j, _ := e.store.CreateJob(ctx, "/dev/sr0")
+	e.engine.Run(ctx, j.ID)
+	got, _ := e.store.Job(ctx, j.ID)
+	if got.State != jobs.Failed || got.Failure == nil || got.Failure.Kind != "rip" {
+		t.Fatalf("state %s, failure %+v; want failed, kind rip", got.State, got.Failure)
+	}
+	if err := e.engine.Retry(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := e.store.Job(ctx, j.ID); got.Failure != nil || got.Note != "" {
+		t.Errorf("after Retry: failure %+v, note %q; want both cleared", got.Failure, got.Note)
+	}
+}
+
+// Retry and Cancel keep only a failure's diagnostics bundle, so a stall's
+// evidence stays downloadable, and drop the kind and messages.
+func TestRetryAndCancelKeepTheBundle(t *testing.T) {
+	for _, act := range []string{"retry", "cancel"} {
+		steps := &fakeSteps{auto: true, failIn: "rip"}
+		e := newEnv(t, steps)
+		j, _ := e.store.CreateJob(ctx, "/dev/sr0")
+		e.engine.Run(ctx, j.ID)
+		failed, _ := e.store.Job(ctx, j.ID)
+		failed.Failure = &jobs.Failure{Kind: jobs.KindRipStalled, Diagnostics: "job-1-20261116-010203",
+			Messages: []makemkv.Message{{Code: 2003}}}
+		e.store.Move(ctx, failed, jobs.Failed, "") // as a stall would have saved it
+		var err error
+		if act == "retry" {
+			err = e.engine.Retry(ctx, j.ID)
+		} else {
+			err = e.engine.Cancel(ctx, j.ID)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := e.store.Job(ctx, j.ID)
+		if got.Failure == nil || got.Failure.Diagnostics != "job-1-20261116-010203" || got.Failure.Kind != "" || got.Failure.Messages != nil {
+			t.Errorf("after %s: failure %+v; want only the bundle's name", act, got.Failure)
+		}
+	}
+}
+
 func TestNilLoggerIsAllowed(t *testing.T) {
 	e := newEnv(t, &fakeSteps{auto: true})
 	eng := jobs.NewEngine(e.store, e.steps, e.stage, nil)

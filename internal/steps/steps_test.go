@@ -391,7 +391,7 @@ func TestVerifyChecksTheFilesTracks(t *testing.T) {
 		"silent rip":                   {audio, FileTracks{Video: 1}, nil, "has no audio track"},
 		"title without audio":          {[]makemkv.Stream{{Type: "Video"}}, FileTracks{Video: 1}, nil, ""},
 		"no video":                     {audio, FileTracks{Audio: 1}, nil, "has no video track"},
-		"not a file mkvmerge can read": {audio, FileTracks{}, errors.New("mkvmerge doesn't recognise it"), "doesn't recognise"},
+		"not a file mkvmerge can read": {audio, FileTracks{}, errors.New("mkvmerge doesn't recognise it"), "doesn't recognise"}, // kind "verify": the check is retried
 		// Star Trek III, v0.1.3: TrueHD 7.1 and its AC-3 copy on the disc,
 		// only the copy in the file.
 		"lossless track lost": {startrek3, FileTracks{Video: 1, Audio: 1, AudioLanguages: []string{"eng"}}, nil,
@@ -412,6 +412,11 @@ func TestVerifyChecksTheFilesTracks(t *testing.T) {
 		err := s.Verify(context.Background(), j, dir)
 		if c.wantErr == "" && err != nil || c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)) {
 			t.Errorf("%s: err = %v; want %q", name, err, c.wantErr)
+		}
+		// Every failed check says its kind, for the failure page.
+		var k interface{ FailKind() string }
+		if err != nil && (!errors.As(err, &k) || !strings.HasPrefix(k.FailKind(), "verify")) {
+			t.Errorf("%s: %v has no verify failure kind", name, err)
 		}
 	}
 }

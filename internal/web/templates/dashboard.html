@@ -44,7 +44,7 @@
       <li><a href="/jobs/{{.Job.ID}}">
         {{template "poster" .}}
         <span class="recent-name">{{name .Job}}{{with .Job.Movie}}{{if .Year}} <span class="muted small">{{.Year}}</span>{{end}}{{end}}</span>
-        <span class="recent-state {{kind .Job.State}}">{{doing .Job}}{{if failed .Job.State}}{{with firstLine .Job.Note}}: {{.}}{{end}}{{end}}</span>
+        <span class="recent-state {{kind .Job.State}}">{{doing .Job}}{{if failed .Job.State}}{{with (explain .Job).What}}: {{.}}{{end}}{{end}}</span>
         <span class="muted small" title="{{when .Job.UpdatedAt}}">{{ago .Job.UpdatedAt}}</span>
       </a></li>
       {{end}}

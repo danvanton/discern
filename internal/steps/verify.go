@@ -80,12 +80,12 @@ func verifyDir(ctx context.Context, j *jobs.Job, dir string, floor float64, trac
 			return err
 		}
 		if info.Size() == 0 {
-			return fmt.Errorf("%s is empty", filepath.Base(path))
+			return failed(jobs.KindVerifySize, "%s is empty", filepath.Base(path))
 		}
 		if t.SizeBytes > 0 {
 			ratio := float64(info.Size()) / float64(t.SizeBytes)
 			if ratio < floor || ratio > maxSizeRatio {
-				return fmt.Errorf("%s is %.0f%% of the size the scan gave title %d (%d of %d bytes); a complete rip is %.0f-%.0f%%",
+				return failed(jobs.KindVerifySize, "%s is %.0f%% of the size the scan gave title %d (%d of %d bytes); a complete rip is %.0f-%.0f%%",
 					filepath.Base(path), ratio*100, idx, info.Size(), t.SizeBytes, floor*100, maxSizeRatio*100)
 			}
 		}
@@ -94,17 +94,20 @@ func verifyDir(ctx context.Context, j *jobs.Job, dir string, floor float64, trac
 		}
 		got, err := tracks(ctx, path)
 		if err != nil {
-			return fmt.Errorf("%s: %w", filepath.Base(path), err)
+			// mkvmerge itself failed (a timeout, a crash), or the file isn't
+			// one it reads: the check is retried, not the rip, so it stays a
+			// plain "verify" failure.
+			return failed("verify", "%s: %w", filepath.Base(path), err)
 		}
 		if got.Video == 0 {
-			return fmt.Errorf("%s has no video track", filepath.Base(path))
+			return failed(jobs.KindVerifyNoVideo, "%s has no video track", filepath.Base(path))
 		}
 		if got.Audio == 0 && hasAudio(t) {
-			return fmt.Errorf("%s has no audio track, though title %d has audio on the disc: check the languages in Settings",
+			return failed(jobs.KindVerifyNoAudio, "%s has no audio track, though title %d has audio on the disc: check the languages in Settings",
 				filepath.Base(path), idx)
 		}
 		if l := lostLossless(t, got); l != "" {
-			return fmt.Errorf("%s kept %s audio but not its lossless track, which title %d has on the disc: the track selection dropped it",
+			return failed(jobs.KindVerifyLossless, "%s kept %s audio but not its lossless track, which title %d has on the disc: the track selection dropped it",
 				filepath.Base(path), languageName(l), idx)
 		}
 	}
@@ -168,4 +171,19 @@ func fileFor(files []string, t makemkv.Title) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no file for title %d (expected %q)", t.Index, t.OutputFile)
+}
+
+// checkError is a failed check with its kind, for the failure page
+// (decision D36).
+type checkError struct {
+	kind string
+	err  error
+}
+
+func (e *checkError) Error() string    { return e.err.Error() }
+func (e *checkError) Unwrap() error    { return e.err }
+func (e *checkError) FailKind() string { return e.kind }
+
+func failed(kind, format string, args ...any) error {
+	return &checkError{kind, fmt.Errorf(format, args...)}
 }

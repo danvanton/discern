@@ -81,6 +81,7 @@ var funcs = template.FuncMap{
 	"ripping": func(s jobs.State) bool { return s == jobs.Ripping },
 	"live":    func(s jobs.State) bool { return s.Active() && s != jobs.NeedsYou },
 	"name":    jobName,
+	"explain": explain,
 	"doing":   doing,
 	"tray":    trayLabel,
 	"minutes": format.Minutes,
@@ -100,12 +101,6 @@ var funcs = template.FuncMap{
 			return ""
 		}
 		return resolutionNames[r]
-	},
-	// firstLine is a note's first line: enough on the dashboard to tell a
-	// swapped disc from a stall. The job page shows the whole note.
-	"firstLine": func(s string) string {
-		first, _, _ := strings.Cut(s, "\n")
-		return first
 	},
 	"initial": func(j *jobs.Job) string {
 		for _, r := range jobName(j) {

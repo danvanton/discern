@@ -66,6 +66,9 @@ type ExitError struct {
 	Stderr   string
 }
 
+// MakeMKVMessages are the run's messages, the best clue to what went wrong.
+func (e *ExitError) MakeMKVMessages() []Message { return e.Messages }
+
 func (e *ExitError) Error() string {
 	s := fmt.Sprintf("makemkvcon %s exited with status %d", e.Op, e.Code)
 	if n := len(e.Messages); n > 0 {
@@ -79,11 +82,15 @@ func (e *ExitError) Error() string {
 type WatchdogError struct {
 	Verdict  Verdict
 	Evidence *Evidence
+	Messages []Message // MakeMKV's messages up to the verdict
 }
 
 func (e *WatchdogError) Error() string {
 	return fmt.Sprintf("rip %s: %s", e.Verdict, e.Evidence.Reason)
 }
+
+// MakeMKVMessages are the rip's messages up to the verdict.
+func (e *WatchdogError) MakeMKVMessages() []Message { return e.Messages }
 
 // Limits on what is kept from a process's output, so a misbehaving
 // makemkvcon can't make Discern use unbounded memory.
@@ -218,7 +225,8 @@ loop:
 			if v != Healthy {
 				// The evidence must be saved before the process stops: the
 				// debug log only exists while makemkvcon holds it open.
-				werr = &WatchdogError{Verdict: v, Evidence: r.evidence(v, cmd.Process.Pid, samples.items(), out, stderr.String())}
+				werr = &WatchdogError{Verdict: v, Evidence: r.evidence(v, cmd.Process.Pid, samples.items(), out, stderr.String()),
+					Messages: out.messages()}
 				tick = nil // no more sampling
 				stop()     // SIGTERM now, SIGKILL after KillAfter
 			}

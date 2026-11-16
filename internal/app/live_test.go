@@ -257,6 +257,61 @@ func TestStartPrunesUnusedPosters(t *testing.T) {
 	}
 }
 
+// A diagnostics bundle is found only by a name of the rip step's form, and
+// only if its folder exists (decision D37).
+func TestDiagnosticsFolder(t *testing.T) {
+	a := New(context.Background(), nil, nil, nil, nil)
+	a.DiagnosticsDir = t.TempDir()
+	good := "job-3-20261116-010203"
+	if _, ok := a.Diagnostics(good); ok {
+		t.Error("a bundle that was never saved was found")
+	}
+	os.Mkdir(filepath.Join(a.DiagnosticsDir, good), 0o755)
+	if dir, ok := a.Diagnostics(good); !ok || dir != filepath.Join(a.DiagnosticsDir, good) {
+		t.Errorf("Diagnostics = %q, %v", dir, ok)
+	}
+	os.Mkdir(filepath.Join(a.DiagnosticsDir, "secrets"), 0o755)
+	for _, bad := range []string{"", "..", "../config", "secrets", "job-3-20261116-010203/..", "job-x-20261116-010203"} {
+		if _, ok := a.Diagnostics(bad); ok {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+	os.WriteFile(filepath.Join(a.DiagnosticsDir, "job-4-20261116-010203"), []byte("x"), 0o644)
+	if _, ok := a.Diagnostics("job-4-20261116-010203"); ok {
+		t.Error("a file was taken for a bundle folder")
+	}
+}
+
+// At start, diagnostics bundles no listed job refers to are removed; a
+// listed job's bundle and anything not named like a bundle stay.
+func TestStartPrunesUnusedDiagnostics(t *testing.T) {
+	w := newWorld(t, 0, "")
+	ctx := context.Background()
+	j, err := w.app.DiscInserted(ctx, "/dev/sr0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := w.waitFor(t, j.ID, jobs.NeedsYou)
+	waiting.Failure = &jobs.Failure{Diagnostics: "job-1-20261116-010203"} // an earlier stall's
+	if err := w.store.Move(ctx, waiting, jobs.Cancelled, ""); err != nil {
+		t.Fatal(err)
+	}
+	w.app.DiagnosticsDir = t.TempDir()
+	for _, name := range []string{"job-1-20261116-010203", "job-9-20251231-235959", "notes"} {
+		os.Mkdir(filepath.Join(w.app.DiagnosticsDir, name), 0o755)
+	}
+	if err := w.app.Resume(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w.app.Wait(5 * time.Second)
+	for name, want := range map[string]bool{"job-1-20261116-010203": true, "job-9-20251231-235959": false, "notes": true} {
+		_, err := os.Stat(filepath.Join(w.app.DiagnosticsDir, name))
+		if (err == nil) != want {
+			t.Errorf("%s: kept %v; want %v", name, err == nil, want)
+		}
+	}
+}
+
 func TestPosterURLWithoutAPoster(t *testing.T) {
 	w := newWorld(t, 0, "")
 	if _, err := w.app.PosterURL(context.Background(), 603); err == nil || !strings.Contains(err.Error(), "no poster") {

@@ -8,8 +8,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +24,7 @@ import (
 	"github.com/danvanton/discern/internal/poster"
 	"github.com/danvanton/discern/internal/radarr"
 	"github.com/danvanton/discern/internal/settings"
+	"github.com/danvanton/discern/internal/steps"
 	"github.com/danvanton/discern/internal/store"
 )
 
@@ -45,6 +49,8 @@ type App struct {
 	Posters *poster.Cache
 	// Trays, if set, says what each drive's tray is doing.
 	Trays *drive.Tracker
+	// DiagnosticsDir is where stalled rips' evidence is saved (decision D37).
+	DiagnosticsDir string
 
 	base context.Context // runs end when this does (shutdown)
 	wg   sync.WaitGroup
@@ -236,20 +242,48 @@ func (a *App) Resume(ctx context.Context) error {
 	if err == nil {
 		var recent []*jobs.Job
 		if recent, err = a.store.RecentJobs(ctx, RecentShown); err == nil {
-			keep := map[int]bool{}
+			keep, bundles := map[int]bool{}, map[string]bool{}
 			for _, j := range append(active, recent...) {
 				if j.Movie != nil {
 					keep[j.Movie.TMDbID] = true
+				}
+				if j.Failure != nil && j.Failure.Diagnostics != "" {
+					bundles[j.Failure.Diagnostics] = true
 				}
 				a.fetchPoster(j.Movie)
 			}
 			if a.Posters != nil {
 				err = a.Posters.Prune(keep)
 			}
+			err = errors.Join(err, a.pruneDiagnostics(bundles))
 		}
 	}
 	if err != nil {
-		a.log.Warn("not tidying the posters at start", "err", err)
+		a.log.Warn("not tidying the posters and diagnostics at start", "err", err)
+	}
+	return nil
+}
+
+// pruneDiagnostics removes diagnostics bundles no listed job refers to:
+// each holds MakeMKV's debug log, and stalls would otherwise fill /config.
+// Only folders named like a bundle are touched.
+func (a *App) pruneDiagnostics(keep map[string]bool) error {
+	if a.DiagnosticsDir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(a.DiagnosticsDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() && steps.BundleName.MatchString(e.Name()) && !keep[e.Name()] {
+			if err := os.RemoveAll(filepath.Join(a.DiagnosticsDir, e.Name())); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -350,6 +384,20 @@ func (a *App) Poster(tmdbID int) (path, contentType string, ok bool) {
 		a.fetchPoster(&jobs.Movie{TMDbID: tmdbID})
 	}
 	return path, contentType, ok
+}
+
+// Diagnostics returns the folder of the diagnostics bundle called name, if
+// it exists. The name comes from the job, but is checked against the form
+// the rip step gives it before it touches the disk.
+func (a *App) Diagnostics(name string) (string, bool) {
+	if a.DiagnosticsDir == "" || !steps.BundleName.MatchString(name) {
+		return "", false
+	}
+	dir := filepath.Join(a.DiagnosticsDir, name)
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return "", false
+	}
+	return dir, true
 }
 
 // SetLive records how drive's rip is going. It is makemkv.Runner.OnLive.

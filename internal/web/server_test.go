@@ -1,6 +1,7 @@
 package web
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -46,6 +47,7 @@ type fakeBackend struct {
 	active      []int64 // the active jobs; 1 and 2 if nil
 	discLangs   *settings.Languages
 	searched    string
+	bundles     map[string]string // diagnostics bundle name → folder
 }
 
 func newBackend() *fakeBackend {
@@ -160,6 +162,11 @@ func (f *fakeBackend) Live(d string) (makemkv.Live, bool) {
 }
 
 func (f *fakeBackend) DriveState(d string) drive.State { return f.trays[d] }
+
+func (f *fakeBackend) Diagnostics(name string) (string, bool) {
+	dir, ok := f.bundles[name]
+	return dir, ok
+}
 
 const user, pass = "dan", "correct horse battery"
 
@@ -333,6 +340,100 @@ func TestFailedJobPage(t *testing.T) {
 	}
 	if strings.Contains(body, "<b>boom</b>") || !strings.Contains(body, "&lt;b&gt;boom&lt;/b&gt;") {
 		t.Error("a job note was not escaped")
+	}
+}
+
+// A failure is said in plain words with what to do, and the details are
+// folded under it: the note, MakeMKV's messages with known errors marked,
+// and the diagnostics download (decisions D35-D37).
+func TestFailurePage(t *testing.T) {
+	b := newBackend()
+	b.jobs[3].Failure = &jobs.Failure{Kind: jobs.KindRipStalled, Diagnostics: "job-3-20261116-010203",
+		Messages: []makemkv.Message{
+			{Code: 1005, Text: "MakeMKV v2.0.0 started"},
+			{Code: 2003, Text: "Error 'Scsi error - <NOT READY>' occurred"},
+		}}
+	srv := newServer(t, b)
+	_, body := get(t, srv, "/jobs/3")
+	// A job retried after a stall still links the stall's diagnostics.
+	b.jobs[2].Failure = &jobs.Failure{Diagnostics: "job-2-20261116-010203"}
+	if _, body := get(t, srv, "/jobs/2"); !strings.Contains(body, `The watchdog stopped an earlier attempt: <a href="/jobs/2/diagnostics.zip" download>`) {
+		t.Error("a retried job doesn't link its earlier stall's diagnostics")
+	}
+	for _, want := range []string{
+		`<p class="failure-what">The rip stalled: MakeMKV kept reading the disc but stopped writing.</p>`,
+		"the diagnostics under Details are what a MakeMKV bug report needs",
+		`<details class="group details">`, "&lt;b&gt;boom&lt;/b&gt;", // the note, escaped
+		`<li><code>1005</code> MakeMKV v2.0.0 started</li>`,
+		`<li class="problem"><code>2003</code> Error &#39;Scsi error - &lt;NOT READY&gt;&#39; occurred</li>`,
+		`<a href="/jobs/3/diagnostics.zip" download>Download the diagnostics (.zip)</a>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("failure page is missing %q", want)
+		}
+	}
+	if _, body := get(t, srv, "/"); !strings.Contains(body, "Failed: The rip stalled") {
+		t.Error("the dashboard doesn't say the failure in plain words")
+	}
+
+	// A kind named by its step, and an old failure with no kind recorded.
+	b.jobs[3].Failure = &jobs.Failure{Kind: "import"}
+	if _, body := get(t, srv, "/jobs/3"); !strings.Contains(body, "Radarr couldn&#39;t import the rip.") || strings.Contains(body, "diagnostics.zip") {
+		t.Error("an import failure isn't explained, or offers diagnostics it doesn't have")
+	}
+	b.jobs[3].Failure = nil
+	if _, body := get(t, srv, "/jobs/3"); !strings.Contains(body, `<p class="failure-what">verify failed: &lt;b&gt;boom&lt;/b&gt;</p>`) {
+		t.Error("a failure without a kind should show its note's first line")
+	}
+}
+
+// The diagnostics bundle comes as one .zip of the bundle's files, behind
+// the login, and only for a job that has one.
+func TestDiagnosticsDownload(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "summary.txt"), []byte("verdict: stalled"), 0o644)
+	os.WriteFile(filepath.Join(dir, "debug-fd5.log"), []byte("MakeMKV debug"), 0o644)
+	os.Mkdir(filepath.Join(dir, "sub"), 0o755) // not a file: left out
+	b := newBackend()
+	b.jobs[3].Failure = &jobs.Failure{Kind: jobs.KindRipStalled, Diagnostics: "job-3-20261116-010203"}
+	b.bundles = map[string]string{"job-3-20261116-010203": dir}
+	srv := newServer(t, b)
+
+	resp, body := get(t, srv, "/jobs/3/diagnostics.zip")
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "application/zip" ||
+		resp.Header.Get("Content-Disposition") != `attachment; filename="discern-job-3-20261116-010203.zip"` {
+		t.Fatalf("download: %d %q %q", resp.StatusCode, resp.Header.Get("Content-Type"), resp.Header.Get("Content-Disposition"))
+	}
+	zr, err := zip.NewReader(strings.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, f := range zr.File {
+		rc, _ := f.Open()
+		b, _ := io.ReadAll(rc)
+		rc.Close()
+		got[f.Name] = string(b)
+	}
+	if len(got) != 2 || got["summary.txt"] != "verdict: stalled" || got["debug-fd5.log"] != "MakeMKV debug" {
+		t.Errorf("zip holds %v", got)
+	}
+
+	// A failure without a bundle is refused before the backend is asked,
+	// even if it had something under an empty name.
+	b.bundles[""] = dir
+	b.jobs[4].Failure = &jobs.Failure{Kind: "import"}
+	for path, want := range map[string]int{"/jobs/1/diagnostics.zip": 404, "/jobs/4/diagnostics.zip": 404, "/jobs/99/diagnostics.zip": 404} {
+		if resp, _ := get(t, srv, path); resp.StatusCode != want {
+			t.Errorf("%s: %d; want %d", path, resp.StatusCode, want)
+		}
+	}
+	b.bundles = nil // the folder is gone
+	if resp, _ := get(t, srv, "/jobs/3/diagnostics.zip"); resp.StatusCode != 404 {
+		t.Errorf("a missing bundle: %d; want 404", resp.StatusCode)
+	}
+	if resp, _ := do(t, srv, "GET", "/jobs/3/diagnostics.zip", nil, false, nil); resp.StatusCode != 401 {
+		t.Errorf("without the login: %d; want 401", resp.StatusCode)
 	}
 }
 

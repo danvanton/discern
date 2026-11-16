@@ -43,6 +43,12 @@ type Steps struct {
 	// it to apply the language settings to MakeMKV. Its error stops the rip.
 	BeforeRip func(ctx context.Context, j *jobs.Job) error
 
+	// Diagnostics, if set, is the folder where a stalled or hung rip's
+	// evidence is saved, one folder per verdict (decision D37).
+	Diagnostics string
+	// Secrets are removed from a diagnostics bundle before it is written:
+	// the MakeMKV key, which a bundle shared in a bug report mustn't carry.
+	Secrets []string
 	// Trimmed, if set, reports whether the job's rip keeps only chosen
 	// languages, so Verify expects smaller files (app.LanguagesChosen).
 	Trimmed func(ctx context.Context, j *jobs.Job) (bool, error)
@@ -176,7 +182,7 @@ func (s *Steps) Rip(ctx context.Context, j *jobs.Job, dir string, progress func(
 		}
 		res, err := s.runner.Rip(ctx, j.Drive, t, sub, onProgress)
 		if err != nil {
-			return fmt.Errorf("title %d: %w", t, err)
+			return fmt.Errorf("title %d: %w", t, s.saveDiagnostics(j, err))
 		}
 		for _, f := range res.OutputFiles {
 			if err := os.Rename(f, filepath.Join(dir, filepath.Base(f))); err != nil {

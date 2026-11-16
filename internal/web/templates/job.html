@@ -61,7 +61,28 @@
   {{else if .Card.Timing.Running}}
   <p class="muted small">{{minutes .Card.Timing.Elapsed}} so far</p>
   {{end}}
-  {{if and .Job.Note (not (waiting .Job.State))}}<p class="note">{{.Job.Note}}</p>{{end}}
+  {{if failed .Job.State}}{{with explain .Job}}
+  <div class="failure">
+    <p class="failure-what">{{.What}}</p>
+    <p>{{.Todo}}</p>
+  </div>
+  {{end}}
+  <details class="group details">
+    <summary>Details</summary>
+    {{with .Job.Note}}<p class="note">{{.}}</p>{{end}}
+    {{with .Job.Failure}}
+    {{if .Diagnostics}}<p><a href="/jobs/{{$.Job.ID}}/diagnostics.zip" download>Download the diagnostics (.zip)</a> <span class="muted small">MakeMKV's debug log, its output and the read and write samples, for a bug report. They name the disc and the drive; Discern removes the MakeMKV key, but look before sharing.</span></p>{{end}}
+    {{with .Messages}}
+    <p class="field">MakeMKV's last messages</p>
+    <ol class="messages">{{range .}}<li{{if .Problem}} class="problem"{{end}}><code>{{.Code}}</code> {{.Text}}</li>
+    {{end}}</ol>
+    {{end}}
+    {{end}}
+  </details>
+  {{else if and .Job.Note (not (waiting .Job.State))}}<p class="note">{{.Job.Note}}</p>{{end}}
+  {{if not (failed .Job.State)}}{{with .Job.Failure}}{{if .Diagnostics}}
+  <p class="small">The watchdog stopped an earlier attempt: <a href="/jobs/{{$.Job.ID}}/diagnostics.zip" download>download its diagnostics (.zip)</a>.</p>
+  {{end}}{{end}}{{end}}
   <div class="actions">
     {{if failed .Job.State}}
     <form method="post" action="/jobs/{{.Job.ID}}/retry"><button type="submit" class="primary">Retry</button></form>

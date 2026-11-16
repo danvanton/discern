@@ -1,6 +1,7 @@
 package makemkv
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,6 +59,26 @@ func debugLogAllowance(kept int, keptBytes int64) int64 {
 	}
 	return min(int64(maxDebugLog), maxDebugLogTotal-keptBytes)
 }
+
+// Redact replaces every secret (MakeMKV's key) in what the evidence holds
+// from MakeMKV, its output, stderr and debug logs, so a bundle a user shares
+// in a bug report can't carry it. Empty secrets are ignored.
+func (e *Evidence) Redact(secrets ...string) {
+	for _, s := range secrets {
+		if s == "" {
+			continue
+		}
+		for i := range e.RobotTail {
+			e.RobotTail[i] = strings.ReplaceAll(e.RobotTail[i], s, redacted)
+		}
+		e.StderrTail = strings.ReplaceAll(e.StderrTail, s, redacted)
+		for i := range e.DebugLogs {
+			e.DebugLogs[i].Data = bytes.ReplaceAll(e.DebugLogs[i].Data, []byte(s), []byte(redacted))
+		}
+	}
+}
+
+const redacted = "[redacted]"
 
 // WriteBundle writes the evidence into dir as plain files: summary.txt,
 // samples.csv, robot-output.txt, stderr.txt and one debug-fd<N>.log per

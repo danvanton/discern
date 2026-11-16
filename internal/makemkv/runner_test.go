@@ -158,6 +158,10 @@ func TestRipStallIsCaughtAndStopped(t *testing.T) {
 	if len(we.Evidence.Samples) < 3 || len(we.Evidence.RobotTail) == 0 {
 		t.Errorf("evidence has %d samples and %d robot lines", len(we.Evidence.Samples), len(we.Evidence.RobotTail))
 	}
+	// MakeMKV's messages up to the stall, for the failure page.
+	if msgs := we.MakeMKVMessages(); len(msgs) == 0 || msgs[0].Code != 1005 {
+		t.Errorf("messages = %+v; want the start-up message first", msgs)
+	}
 
 	bundle := t.TempDir()
 	if err := we.Evidence.WriteBundle(bundle); err != nil {
@@ -417,6 +421,10 @@ func TestIncompleteScanErrorCountsAndBoundsMessages(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "2 read errors, 1 title skipped") {
 		t.Errorf("error = %q", err)
+	}
+	// The scan's messages go with it, for the failure page.
+	if msgs := inc.MakeMKVMessages(); len(msgs) != 5 || !msgs[1].Problem() || msgs[0].Problem() {
+		t.Errorf("messages = %d, problems marked %v %v", len(msgs), msgs[0].Problem(), msgs[1].Problem())
 	}
 	if checkComplete(&Disc{Messages: []Message{{Code: 5011}}}) != nil {
 		t.Error("a scan without errors was called incomplete")

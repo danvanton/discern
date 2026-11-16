@@ -131,6 +131,9 @@ func mkv(m Mkv, title int, dir string, stdout, stderr io.Writer) int {
 	if m.TitleName == "" {
 		m.TitleName = "Fake Title"
 	}
+	// The start-up line every real run prints (as in the recorded scans), so
+	// a failed or stalled rip has messages to show.
+	fmt.Fprintf(stdout, "MSG:1005,0,1,\"MakeMKV v2.0.0 linux(x64-release) started\",\"%%1 started\",\"MakeMKV v2.0.0 linux(x64-release)\"\n")
 	if m.ChunkBytes <= 0 {
 		m.ChunkBytes = 64 << 10
 	}

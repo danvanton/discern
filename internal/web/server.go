@@ -61,6 +61,8 @@ type Backend interface {
 	Poster(tmdbID int) (path, contentType string, ok bool)
 	Live(drive string) (makemkv.Live, bool)
 	DriveState(drive string) drive.State
+	// Diagnostics returns the folder of a saved diagnostics bundle (D37).
+	Diagnostics(name string) (dir string, ok bool)
 }
 
 // Options configures the server.
@@ -114,6 +116,7 @@ func New(b Backend, opt Options) (http.Handler, error) {
 	mux.HandleFunc("POST /settings", s.saveSettings)
 	mux.HandleFunc("GET /api/v1/jobs", s.apiJobs)
 	mux.HandleFunc("GET /posters/{tmdb}", s.poster)
+	mux.HandleFunc("GET /jobs/{id}/diagnostics.zip", s.diagnostics)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 
 	// Health endpoints sit outside the login, for container health checks.

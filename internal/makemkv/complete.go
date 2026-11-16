@@ -13,7 +13,19 @@ const (
 	msgReadError        = 2003 // "Error '…' occurred while reading '…' at offset '…'"
 	msgTitleSkipped     = 3016 // "Title #… was skipped"
 	msgTitleUndecodable = 5043 // "Failed to decode audio/video data for title #… , title skipped."
+	msgOpenFailed       = 5010 // "Failed to open disc"
 )
+
+// Problem reports whether m is one of the MakeMKV errors Discern knows, for
+// the failure page to mark. MakeMKV's flags field is 0 on every message
+// recorded so far, so it can't tell errors apart; the codes can.
+func (m Message) Problem() bool {
+	switch m.Code {
+	case msgReadError, msgTitleSkipped, msgTitleUndecodable, msgOpenFailed:
+		return true
+	}
+	return false
+}
 
 // IncompleteScanError is a scan that makemkvcon finished with exit status 0,
 // but without reading the whole disc. Its titles can't be trusted: some are
@@ -24,7 +36,8 @@ const (
 type IncompleteScanError struct {
 	ReadErrors int
 	Skipped    int
-	First      string // the first error or skip message, as MakeMKV printed it
+	First      string    // the first error or skip message, as MakeMKV printed it
+	Messages   []Message // all the scan's messages
 }
 
 func (e *IncompleteScanError) Error() string {
@@ -57,6 +70,7 @@ func checkComplete(d *Disc) error {
 	if e.Skipped == 0 && !notReady {
 		return nil
 	}
+	e.Messages = d.Messages
 	return e
 }
 
@@ -77,3 +91,6 @@ func shorten(s string, n int) string {
 	r := []rune(s)
 	return string(r[:n]) + "…"
 }
+
+// MakeMKVMessages are the scan's messages, for the failure page.
+func (e *IncompleteScanError) MakeMKVMessages() []Message { return e.Messages }

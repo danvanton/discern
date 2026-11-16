@@ -213,6 +213,10 @@ func run(log *slog.Logger) error {
 	a.Posters = poster.New(filepath.Join(cfg.DataDir, "posters"), a.PosterURL, log)
 	a.Trays = tracker
 	runner.OnLive = a.SetLive
+	// A stalled rip's evidence, offered from the failure page (decision D37).
+	jobSteps.Diagnostics = filepath.Join(cfg.DataDir, "diagnostics")
+	jobSteps.Secrets = []string{cfg.MakeMKVKey}
+	a.DiagnosticsDir = jobSteps.Diagnostics
 	if err := a.Resume(ctx); err != nil {
 		return fmt.Errorf("resuming jobs: %w", err)
 	}

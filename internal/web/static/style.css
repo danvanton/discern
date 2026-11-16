@@ -306,3 +306,12 @@ details.search > summary, details.by-id > summary { cursor: pointer; color: var(
 }
 .results a:hover strong { color: var(--accent); }
 .results .poster { width: 36px; height: 54px; }
+
+/* The failure page (decisions D35-D37) */
+.failure { border-left: 3px solid var(--bad); padding-left: 0.75rem; margin: 0.75rem 0; }
+.failure-what { font-weight: 700; }
+.messages { padding-left: 1.5rem; margin: 0.25rem 0; font-size: 0.85rem; overflow-wrap: anywhere; }
+.messages li { padding: 0.1rem 0; }
+.messages li.problem { color: var(--bad); }
+.messages code { color: var(--muted); }
+.messages li.problem code { color: inherit; }

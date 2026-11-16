@@ -23,6 +23,9 @@ type Job struct {
 	// Why the job is waiting in NeedsYou, or why it failed, in one sentence
 	// for the UI.
 	Note string
+	// Failure says why a failed job failed, for the failure page; nil
+	// otherwise.
+	Failure *Failure
 	// FailedIn is where Retry resumes: usually the state the job was in when
 	// it failed, but Detected when its disc was swapped (a fresh scan is
 	// needed).

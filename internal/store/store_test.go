@@ -134,6 +134,20 @@ func TestMoveSavesTheDiscsLanguages(t *testing.T) {
 	}
 }
 
+// A failed job's description (decisions D35-D37) is saved with it.
+func TestMoveSavesTheFailure(t *testing.T) {
+	s, _ := openTest(t)
+	j, _ := s.CreateJob(ctx, "/dev/sr0")
+	j.Failure = &jobs.Failure{Kind: jobs.KindRipStalled, Diagnostics: "job-1-20261116-010203",
+		Messages: []makemkv.Message{{Code: 2003, Text: "Error 'Scsi error - NOT READY' occurred"}}}
+	if err := s.Move(ctx, j, jobs.Failed, "rip failed"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Job(ctx, j.ID); !reflect.DeepEqual(got.Failure, j.Failure) {
+		t.Errorf("failure = %+v; want %+v", got.Failure, j.Failure)
+	}
+}
+
 // Move is a compare-and-swap: a stale copy of the job can't overwrite a newer
 // state.
 func TestMoveRefusesAStaleJob(t *testing.T) {

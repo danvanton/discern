@@ -230,6 +230,7 @@ func (e *Engine) failIn(ctx context.Context, j *Job, resumeIn State, what string
 	}
 	j.FailedIn = resumeIn
 	j.Note = fmt.Sprintf("%s failed: %v", what, err)
+	j.Failure = describe(what, err)
 	return e.move(ctx, j, Failed, j.Note)
 }
 
@@ -281,7 +282,7 @@ func (e *Engine) Retry(ctx context.Context, id int64) error {
 	if j.FailedIn == Ripping || j.FailedIn == Verifying || j.FailedIn == Importing {
 		to = j.FailedIn
 	}
-	j.FailedIn, j.Note = "", ""
+	j.FailedIn, j.Note, j.Failure = "", "", keepBundle(j.Failure)
 	return e.move(ctx, j, to, "retry")
 }
 
@@ -322,6 +323,7 @@ func (e *Engine) cancelIdle(ctx context.Context, id int64) error {
 	if j.State.Terminal() {
 		return fmt.Errorf("job %d is already %s", id, j.State)
 	}
+	j.Failure = keepBundle(j.Failure)
 	if err := e.move(ctx, j, Cancelled, "cancelled by user"); err != nil {
 		return err
 	}
