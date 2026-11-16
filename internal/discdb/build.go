@@ -84,6 +84,11 @@ func Build(root, source string, now time.Time) (*Index, BuildReport, error) {
 			}
 			slices.Sort(files)
 			for _, f := range files {
+				// TheDiscDB's newer optical-disc-manifest files (discNN.odm.json)
+				// sit next to the discNN.json records, in another format.
+				if strings.HasSuffix(f, ".odm.json") {
+					continue
+				}
 				d, err := readDisc(f)
 				if err != nil {
 					rep.Skipped = append(rep.Skipped, fmt.Sprintf("%s/%s/%s: %v", m.Name(), r.Name(), filepath.Base(f), err))

@@ -241,6 +241,8 @@ func TestBuildSkipsABadRecord(t *testing.T) {
 	os.WriteFile(bad, []byte("{not json"), 0o644)
 	os.MkdirAll(filepath.Join(root, "data", "movie", "No Id (2000)", "r"), 0o755)
 	os.WriteFile(filepath.Join(root, "data", "movie", "No Id (2000)", "metadata.json"), []byte(`{"Title":"No Id","ExternalIds":{"Tmdb":""}}`), 0o644)
+	// A newer-format manifest next to a record is left out, not skipped.
+	os.WriteFile(filepath.Join(root, "data", "movie", "Kill Bill Vol. 1 (2003)", "2025-4k", "disc01.odm.json"), []byte(`{"schema":"odm/v1"}`), 0o644)
 	_, rep, err := Build(root, "", time.Now())
 	if err != nil {
 		t.Fatal(err)

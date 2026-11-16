@@ -45,7 +45,9 @@ jobs:
           set -eu
           git clone --quiet --depth 1 --filter=blob:none --no-checkout https://github.com/TheDiscDb/data.git thediscdb
           cd thediscdb
-          git sparse-checkout set --no-cone '/LICENSE' '/data/movie/*/metadata.json' '/data/movie/*/*/disc*.json'
+          # discNN.odm.json, TheDiscDB's newer manifest format, sits next to each
+          # discNN.json record at several times its size; it isn't used.
+          git sparse-checkout set --no-cone '/LICENSE' '/data/movie/*/metadata.json' '/data/movie/*/*/disc*.json' '!/data/movie/*/*/disc*.odm.json'
           git checkout --quiet
           echo "SOURCE=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "BUILT=$(git log -1 --format=%cI)" >> "$GITHUB_ENV"
