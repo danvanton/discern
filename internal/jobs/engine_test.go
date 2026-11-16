@@ -193,13 +193,13 @@ func TestJobWaitsForApprovalThenFinishes(t *testing.T) {
 	if st := e.state(t, j.ID); st != jobs.NeedsYou {
 		t.Fatalf("state = %s, want needs_you", st)
 	}
-	if err := e.engine.Approve(ctx, j.ID, []int{7}, nil); err == nil {
+	if err := e.engine.Approve(ctx, j.ID, []int{7}, nil, nil); err == nil {
 		t.Error("approved a title that isn't on the disc")
 	}
-	if err := e.engine.Approve(ctx, j.ID, nil, nil); err == nil {
+	if err := e.engine.Approve(ctx, j.ID, nil, nil, nil); err == nil {
 		t.Error("approved no titles")
 	}
-	if err := e.engine.Approve(ctx, j.ID, []int{1}, nil); err != nil {
+	if err := e.engine.Approve(ctx, j.ID, []int{1}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.engine.Run(ctx, j.ID); err != nil {
@@ -598,11 +598,11 @@ func TestApproveCanCorrectTheMovie(t *testing.T) {
 	e := newEnv(t, &fakeSteps{auto: false})
 	j, _ := e.store.CreateJob(ctx, "/dev/sr0")
 	e.engine.Run(ctx, j.ID)
-	if err := e.engine.Approve(ctx, j.ID, []int{0}, &jobs.Movie{TMDbID: 0}); err == nil {
+	if err := e.engine.Approve(ctx, j.ID, []int{0}, &jobs.Movie{TMDbID: 0}, nil); err == nil {
 		t.Error("approved a movie without a TMDb id")
 	}
 	fixed := &jobs.Movie{TMDbID: 559, Title: "Spider-Man 3", Year: 2007}
-	if err := e.engine.Approve(ctx, j.ID, []int{0}, fixed); err != nil {
+	if err := e.engine.Approve(ctx, j.ID, []int{0}, fixed, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := e.store.Job(ctx, j.ID); got.Movie == nil || got.Movie.TMDbID != 559 {

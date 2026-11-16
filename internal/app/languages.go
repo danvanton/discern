@@ -9,19 +9,21 @@ import (
 	"github.com/danvanton/discern/internal/lang"
 	"github.com/danvanton/discern/internal/makemkv"
 	"github.com/danvanton/discern/internal/makemkv/install"
+	"github.com/danvanton/discern/internal/settings"
 )
 
 // selectionSetting is MakeMKV's setting for its track selection rule.
 const selectionSetting = "app_DefaultSelectionString"
 
-// ApplyLanguages puts the saved language choice into MakeMKV's settings
-// before a rip (decisions D20, D24). It is Steps.BeforeRip.
+// ApplyLanguages puts the language choice into MakeMKV's settings before a
+// rip (decisions D20, D24, D34). It is Steps.BeforeRip.
 //
-// With no choice saved it removes Discern's rule, so MakeMKV's own default
-// applies. With one, a chosen title that has no audio in those languages (a
-// foreign film) keeps its own audio as well, for this rip only: its languages
-// are added after the user's. The per-disc choice on the review page will
-// replace that.
+// The choice is the disc's own, made on the review page, or else the
+// Settings page's. With neither it removes Discern's rule, so MakeMKV's own
+// default applies. With the Settings page's, a chosen title that has no
+// audio in those languages (a foreign film) keeps its own audio as well, for
+// this rip only: its languages are added after the user's. A disc's own
+// choice is used exactly: the user chose from that disc's languages.
 //
 // The settings file is shared by every makemkvcon, which is fine with one
 // drive; several drives ripping at once (v0.4) will need one per drive.
@@ -29,17 +31,19 @@ func (a *App) ApplyLanguages(ctx context.Context, j *jobs.Job) error {
 	if a.MakeMKVSettings == "" {
 		return nil // development, with the fake makemkvcon
 	}
-	st, err := a.store.Settings(ctx)
+	l, perDisc, err := a.languagesFor(ctx, j)
 	if err != nil {
-		return fmt.Errorf("reading the settings: %w", err)
+		return err
 	}
 	rule := ""
-	if l := st.Languages; l != nil {
+	if l != nil {
 		audio := l.Audio
-		if own := ownAudio(j, audio); len(own) > 0 {
-			a.log.Info("a title has no audio in the chosen languages; keeping its own for this rip",
-				"job", j.ID, "chosen", audio, "kept", own)
-			audio = append(slices.Clone(audio), own...)
+		if !perDisc {
+			if own := ownAudio(j, audio); len(own) > 0 {
+				a.log.Info("a title has no audio in the chosen languages; keeping its own for this rip",
+					"job", j.ID, "chosen", audio, "kept", own)
+				audio = append(slices.Clone(audio), own...)
+			}
 		}
 		if rule, err = makemkv.SelectionRule(audio, l.Subtitles, l.ForcedOnly, l.Commentary); err != nil {
 			return err
@@ -51,14 +55,27 @@ func (a *App) ApplyLanguages(ctx context.Context, j *jobs.Job) error {
 	return nil
 }
 
-// LanguagesChosen reports whether rips keep only chosen languages, which
-// makes the files smaller than the scan said. It is Steps.Trimmed.
-func (a *App) LanguagesChosen(ctx context.Context) (bool, error) {
+// languagesFor returns the track choice for j's rip: the disc's own
+// (perDisc), or the Settings page's. Nil means MakeMKV's default.
+func (a *App) languagesFor(ctx context.Context, j *jobs.Job) (l *settings.Languages, perDisc bool, err error) {
+	if j.Languages != nil {
+		return j.Languages, true, nil
+	}
+	st, err := a.store.Settings(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("reading the settings: %w", err)
+	}
+	return st.Languages, false, nil
+}
+
+// LanguagesChosen reports whether j's rip keeps only chosen languages, which
+// makes the file smaller than the scan said. It is Steps.Trimmed.
+func (a *App) LanguagesChosen(ctx context.Context, j *jobs.Job) (bool, error) {
 	if a.MakeMKVSettings == "" {
 		return false, nil
 	}
-	st, err := a.store.Settings(ctx)
-	return st.Languages != nil, err
+	l, _, err := a.languagesFor(ctx, j)
+	return l != nil, err
 }
 
 // ownAudio returns the audio languages of the job's chosen titles that have

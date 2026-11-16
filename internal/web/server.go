@@ -49,7 +49,8 @@ type Backend interface {
 	DriveList() []string
 	Pending(drive string) bool
 	DiscInserted(ctx context.Context, drive string) (*jobs.Job, error)
-	Approve(ctx context.Context, id int64, titles []int, movie *jobs.Movie) error
+	Approve(ctx context.Context, id int64, titles []int, movie *jobs.Movie, langs *settings.Languages) error
+	SearchMovies(ctx context.Context, term string) ([]jobs.Movie, error)
 	Retry(ctx context.Context, id int64) error
 	Cancel(ctx context.Context, id int64) error
 	LookupMovie(ctx context.Context, tmdbID int) (*jobs.Movie, error)
@@ -356,6 +357,7 @@ type jobData struct {
 	Card    card
 	Steps   []step
 	Events  []jobs.Event
+	Review  review // the review page's parts, while the job needs the user
 	Error   string
 }
 
@@ -406,6 +408,29 @@ func (s *server) showJob(w http.ResponseWriter, r *http.Request, status int, msg
 		return
 	}
 	d.Error = msg
+	if j.State == jobs.NeedsYou {
+		// A movie picked on the page comes from the address (a search result
+		// or a typed id). A search and a pick ask Radarr and save posters, so
+		// one sent from another website is ignored, like any change it tries.
+		q, pick := r.URL.Query().Get("q"), r.URL.Query().Get("tmdb")
+		if !fromThisSite(r) {
+			q, pick = "", ""
+		}
+		shown := j
+		if r.Method == http.MethodPost {
+			// A refused approval is shown as the user left it: their titles,
+			// languages and movie, not the saved job's.
+			form := *j
+			form.Titles, form.Languages = postedTitles(r.PostForm), discLanguages(r.PostForm)
+			shown, pick = &form, r.PostForm.Get("tmdb_id")
+		}
+		id, _ := strconv.Atoi(strings.TrimSpace(pick))
+		var problem string
+		d.Review, problem = s.reviewFor(r.Context(), shown, id, q)
+		if d.Error == "" {
+			d.Error = problem
+		}
+	}
 	s.render(w, status, "job.html", "layout", d)
 }
 
@@ -496,11 +521,11 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.b.Approve(r.Context(), j.ID, titles, movie); err != nil {
+	if err := s.b.Approve(r.Context(), j.ID, titles, movie, discLanguages(r.PostForm)); err != nil {
 		msg := err.Error()
 		if errors.Is(err, jobs.ErrNoMovie) {
 			// Worded here, where the form is: the engine doesn't know the page.
-			msg = "Choose the movie first: type its TMDb id in the box above the titles. It is the number in the movie's address on themoviedb.org."
+			msg = "Choose the movie first: search for it by name above the titles."
 		}
 		s.showJob(w, r, http.StatusUnprocessableEntity, msg)
 		return

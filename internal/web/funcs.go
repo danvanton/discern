@@ -93,6 +93,14 @@ var funcs = template.FuncMap{
 		return "about " + format.Minutes(d)
 	},
 	"rate": format.Rate,
+	// res names a title's picture: "4K", "1080p", "720p" or "DVD".
+	"res": func(t makemkv.Title) string {
+		r, ok := t.Resolution()
+		if !ok {
+			return ""
+		}
+		return resolutionNames[r]
+	},
 	// firstLine is a note's first line: enough on the dashboard to tell a
 	// swapped disc from a stall. The job page shows the whole note.
 	"firstLine": func(s string) string {

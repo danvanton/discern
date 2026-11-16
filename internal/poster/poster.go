@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -18,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -106,6 +108,46 @@ func (c *Cache) File(tmdbID int) (path, contentType string, ok bool) {
 	return "", "", false
 }
 
+// Prune removes the cached posters of movies not in keep, and anything left
+// half-written: search results nobody picked would otherwise pile up for
+// ever. A pruned poster is fetched again if a page needs it.
+func (c *Cache) Prune(keep map[int]bool) error {
+	entries, err := os.ReadDir(c.Dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		id, err := strconv.Atoi(strings.TrimSuffix(name, filepath.Ext(name)))
+		ours := err == nil && types[mimeOf(filepath.Ext(name))] != ""
+		switch {
+		case strings.HasPrefix(name, ".poster-"): // a fetch cut off mid-write
+		case !ours || keep[id]:
+			continue
+		}
+		if err := os.Remove(filepath.Join(c.Dir, name)); err != nil {
+			return err
+		}
+		c.mu.Lock()
+		delete(c.found, id)
+		c.mu.Unlock()
+	}
+	return nil
+}
+
+// mimeOf is the content type a cached poster's extension stands for.
+func mimeOf(ext string) string {
+	for ct, e := range types {
+		if e == ext {
+			return ct
+		}
+	}
+	return ""
+}
+
 // Due reports whether the poster for tmdbID is missing and may be fetched:
 // never tried, or the last try is older than retryAfter. It only looks at
 // memory, so a page can ask at every refresh.
@@ -132,6 +174,12 @@ func (c *Cache) clock() time.Time {
 // Fetch gets the poster for tmdbID, unless it is already cached or was
 // tried in the last retryAfter: a failure is not retried at every page view.
 func (c *Cache) Fetch(ctx context.Context, tmdbID int) error {
+	return c.FetchFrom(ctx, tmdbID, "")
+}
+
+// FetchFrom is Fetch with the poster's address already known (raw, from a
+// Radarr search result), so Radarr isn't asked again. An empty raw asks it.
+func (c *Cache) FetchFrom(ctx context.Context, tmdbID int, raw string) error {
 	if tmdbID <= 0 {
 		return fmt.Errorf("no poster for TMDb id %d", tmdbID)
 	}
@@ -149,17 +197,19 @@ func (c *Cache) Fetch(ctx context.Context, tmdbID int) error {
 	c.tried[tmdbID] = c.clock()
 	c.mu.Unlock()
 
-	err := c.fetch(ctx, tmdbID)
+	err := c.fetch(ctx, tmdbID, raw)
 	if err != nil && c.Log != nil {
 		c.Log.Warn("no poster for this movie; trying again in an hour", "tmdb", tmdbID, "err", err)
 	}
 	return err
 }
 
-func (c *Cache) fetch(ctx context.Context, tmdbID int) error {
-	raw, err := c.URL(ctx, tmdbID)
-	if err != nil {
-		return err
+func (c *Cache) fetch(ctx context.Context, tmdbID int, raw string) error {
+	if raw == "" {
+		var err error
+		if raw, err = c.URL(ctx, tmdbID); err != nil {
+			return err
+		}
 	}
 	u, err := Sized(raw)
 	if err != nil {

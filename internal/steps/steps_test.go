@@ -359,7 +359,7 @@ func TestVerifyAllowsSmallerFilesWhenLanguagesTrimThem(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, "Movie_t00.mkv"), size)
 		s := New(nil, nil)
-		s.Trimmed = func(context.Context) (bool, error) { return c.trimmed, nil }
+		s.Trimmed = func(context.Context, *jobs.Job) (bool, error) { return c.trimmed, nil }
 		err := s.Verify(context.Background(), j, dir)
 		if c.wantErr == "" && err != nil || c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)) {
 			t.Errorf("%d bytes, trimmed %v: err = %v; want %q", size, c.trimmed, err, c.wantErr)
@@ -368,7 +368,7 @@ func TestVerifyAllowsSmallerFilesWhenLanguagesTrimThem(t *testing.T) {
 
 	// A settings read that fails is an error, not the default floor.
 	s := New(nil, nil)
-	s.Trimmed = func(context.Context) (bool, error) { return false, errors.New("database is closed") }
+	s.Trimmed = func(context.Context, *jobs.Job) (bool, error) { return false, errors.New("database is closed") }
 	if err := s.Verify(context.Background(), j, t.TempDir()); err == nil {
 		t.Error("Verify ignored a failed settings read")
 	}

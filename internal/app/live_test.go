@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/png"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -143,6 +146,114 @@ func TestAPageViewFetchesAMissingPoster(t *testing.T) {
 	a.Wait(5 * time.Second)
 	if asked.Load() != 1 {
 		t.Errorf("Radarr was asked %d times; want no second try within the hour", asked.Load())
+	}
+}
+
+// The review page's movie search (decision D33): up to 8 matches with a
+// TMDb id, their posters fetched from the addresses Radarr gave, before the
+// page is shown.
+func TestSearchMovies(t *testing.T) {
+	w := newWorld(t, 0, "")
+	var results []map[string]any
+	results = append(results, map[string]any{"tmdbId": 0, "title": "No id", "year": 2000})
+	for i := 1; i <= 10; i++ {
+		m := map[string]any{"tmdbId": 1000 + i, "title": fmt.Sprintf("Star Trek %d", i), "year": 1978 + i}
+		if i == 1 {
+			m["images"] = []map[string]any{{"coverType": "poster", "remoteUrl": "https://image.tmdb.org/t/p/original/st1.png"}}
+		}
+		results = append(results, m)
+	}
+	w.radarr.SetLookupFor("star trek", results...)
+	var img bytes.Buffer
+	png.Encode(&img, image.NewGray(image.Rect(0, 0, 2, 3)))
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) { rw.Write(img.Bytes()) }))
+	defer srv.Close()
+	w.app.Posters = poster.New(t.TempDir(), func(context.Context, int) (string, error) {
+		return "", errors.New("the search's own address should be used")
+	}, w.app.log)
+	w.app.Posters.Client.Transport = tmdbImages{srv}
+
+	got, err := w.app.SearchMovies(context.Background(), "  star trek ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 8 || got[0].TMDbID != 1001 || got[0].Title != "Star Trek 1" || got[0].Year != 1979 {
+		t.Errorf("got %d results starting %+v; want 8, starting with Star Trek 1 (1979), without the one with no id", len(got), got[0])
+	}
+	if _, _, ok := w.app.Poster(1001); !ok {
+		t.Error("the first result's poster wasn't fetched before the results were shown")
+	}
+	for _, bad := range []string{"", "   ", strings.Repeat("x", 101)} {
+		if _, err := w.app.SearchMovies(context.Background(), bad); err == nil {
+			t.Errorf("search %q was sent", bad)
+		}
+	}
+}
+
+// A poster slower than the search's wait isn't cut off: the results come
+// back without it, and it arrives in the background.
+func TestASlowSearchPosterStillArrives(t *testing.T) {
+	w := newWorld(t, 0, "")
+	w.radarr.SetLookupFor("slow", map[string]any{"tmdbId": 559, "title": "Spider-Man 3", "year": 2007,
+		"images": []map[string]any{{"coverType": "poster", "remoteUrl": "https://image.tmdb.org/t/p/original/s.png"}}})
+	var img bytes.Buffer
+	png.Encode(&img, image.NewGray(image.Rect(0, 0, 2, 3)))
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		<-release
+		rw.Write(img.Bytes())
+	}))
+	defer srv.Close()
+	defer close(release)
+	w.app.Posters = poster.New(t.TempDir(), w.app.PosterURL, w.app.log)
+	w.app.Posters.Client.Transport = tmdbImages{srv}
+
+	start := time.Now()
+	if got, err := w.app.SearchMovies(context.Background(), "slow"); err != nil || len(got) != 1 {
+		t.Fatalf("results %v, %v", got, err)
+	}
+	if took := time.Since(start); took > searchPosterWait+2*time.Second {
+		t.Errorf("the search waited %v for a slow poster; the page waits %v at most", took, searchPosterWait)
+	}
+	release <- struct{}{} // the image server answers now
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, _, ok := w.app.Poster(559); ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the slow poster never arrived: it was cut off with the page's wait")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// At start, posters no listed job uses (search results nobody picked) are
+// removed, and those of listed jobs kept.
+func TestStartPrunesUnusedPosters(t *testing.T) {
+	w := newWorld(t, 0, "")
+	ctx := context.Background()
+	j, err := w.app.DiscInserted(ctx, "/dev/sr0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.waitFor(t, j.ID, jobs.NeedsYou) // identified as The Matrix (603)
+	dir := t.TempDir()
+	w.app.Posters = poster.New(dir, func(context.Context, int) (string, error) { return "", errors.New("offline") }, w.app.log)
+	for _, name := range []string{"603.jpg", "559.jpg"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.app.Resume(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w.app.Wait(5 * time.Second)
+	if _, err := os.Stat(filepath.Join(dir, "603.jpg")); err != nil {
+		t.Error("the waiting job's poster was removed")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "559.jpg")); !os.IsNotExist(err) {
+		t.Error("a poster no job uses was kept")
 	}
 }
 

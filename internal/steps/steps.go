@@ -43,9 +43,9 @@ type Steps struct {
 	// it to apply the language settings to MakeMKV. Its error stops the rip.
 	BeforeRip func(ctx context.Context, j *jobs.Job) error
 
-	// Trimmed, if set, reports whether rips keep only chosen languages, so
-	// Verify expects smaller files (app.LanguagesChosen).
-	Trimmed func(ctx context.Context) (bool, error)
+	// Trimmed, if set, reports whether the job's rip keeps only chosen
+	// languages, so Verify expects smaller files (app.LanguagesChosen).
+	Trimmed func(ctx context.Context, j *jobs.Job) (bool, error)
 	// Tracks, if set, reads a ripped file's tracks for Verify (Mkvmerge).
 	Tracks func(ctx context.Context, file string) (FileTracks, error)
 

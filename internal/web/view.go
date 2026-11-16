@@ -106,10 +106,13 @@ func quality(j *jobs.Job) string {
 		if !ok {
 			return ""
 		}
-		return map[int]string{2160: "4K", 1080: "1080p", 720: "720p", 480: "DVD"}[res]
+		return resolutionNames[res]
 	}
 	return ""
 }
+
+// resolutionNames are a title's resolutions as people say them.
+var resolutionNames = map[int]string{2160: "4K", 1080: "1080p", 720: "720p", 480: "DVD"}
 
 // step is one line of the ripping page's progress list.
 type step struct {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	"github.com/danvanton/discern/internal/app"
 	"github.com/danvanton/discern/internal/drive"
 	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/lang"
 	"github.com/danvanton/discern/internal/makemkv"
 	"github.com/danvanton/discern/internal/settings"
 )
@@ -41,6 +44,8 @@ type fakeBackend struct {
 	trays       map[string]drive.State
 	events      map[int64][]jobs.Event
 	active      []int64 // the active jobs; 1 and 2 if nil
+	discLangs   *settings.Languages
+	searched    string
 }
 
 func newBackend() *fakeBackend {
@@ -97,12 +102,22 @@ func (f *fakeBackend) DiscInserted(_ context.Context, d string) (*jobs.Job, erro
 	f.scanned = d
 	return &jobs.Job{ID: 9}, nil
 }
-func (f *fakeBackend) Approve(_ context.Context, id int64, titles []int, m *jobs.Movie) error {
+func (f *fakeBackend) Approve(_ context.Context, id int64, titles []int, m *jobs.Movie, l *settings.Languages) error {
 	if f.failNext != nil {
 		return f.failNext
 	}
-	f.approved, f.movie = titles, m
+	f.approved, f.movie, f.discLangs = titles, m, l
 	return nil
+}
+func (f *fakeBackend) SearchMovies(_ context.Context, term string) ([]jobs.Movie, error) {
+	f.searched = term
+	if term == "broken" {
+		return nil, errors.New("radarr is down")
+	}
+	if term == "spider" {
+		return []jobs.Movie{{TMDbID: 559, Title: "Spider-Man 3", Year: 2007}, {TMDbID: 557, Title: "Spider-Man", Year: 2002}}, nil
+	}
+	return nil, nil
 }
 func (f *fakeBackend) Retry(_ context.Context, id int64) error { f.retried = id; return f.failNext }
 func (f *fakeBackend) Cancel(context.Context, int64) error     { return f.failNext }
@@ -268,7 +283,7 @@ func TestNoJobNumbersShown(t *testing.T) {
 	srv := newServer(t, newBackend())
 	for _, page := range []string{"/", "/jobs/1", "/jobs/2", "/jobs/3"} {
 		_, body := get(t, srv, page)
-		text := regexp.MustCompile(`<[^>]*>`).ReplaceAllString(body, " ")
+		text := html.UnescapeString(regexp.MustCompile(`<[^>]*>`).ReplaceAllString(body, " "))
 		if regexp.MustCompile(`#\s*\d`).MatchString(text) || strings.Contains(text, "Job ") {
 			t.Errorf("%s shows a job number", page)
 		}
@@ -357,10 +372,12 @@ func TestJobPageForApproval(t *testing.T) {
 	srv := newServer(t, newBackend())
 	_, body := get(t, srv, "/jobs/1")
 	for _, want := range []string{
-		`action="/jobs/1/approve"`, `name="tmdb_id"`, `value="603"`,
-		`name="title" value="0" aria-label="Rip title 0" checked`, // the suggestion is pre-ticked
-		`name="title" value="1" aria-label="Rip title 1">`,        // the other one isn't
-		"1:58:00", "33.0 GiB", "00800.mpls", "HEVC 3840x2160", ">main<",
+		`action="/jobs/1/approve"`, `<input type="hidden" name="tmdb_id" value="603">`,
+		"The Matrix (1999)", "Wrong movie? Search",
+		`<input type="checkbox" name="title" value="0" checked>`, // the suggestion is pre-ticked
+		`<input type="checkbox" name="title" value="1">`,         // the other one isn't
+		"1:58:00", "33.0 GiB", "00800.mpls", "4K", ">main<",
+		"Suggested because title 0 is the longest.",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("job page is missing %q", want)
@@ -405,6 +422,156 @@ func TestApprove(t *testing.T) {
 	b.failNext = errors.New("choose at least one title")
 	if _, body := do(t, srv, "POST", "/jobs/1/approve", url.Values{}, true, nil); !strings.Contains(body, "choose at least one title") {
 		t.Error("the engine's refusal wasn't shown")
+	}
+}
+
+// A wrong movie is found by name (decision D33): the results link back to
+// the page with the pick, which the approve form then sends. Nothing is
+// saved by searching or picking.
+func TestReviewMovieSearch(t *testing.T) {
+	b := newBackend()
+	srv := newServer(t, b)
+	_, body := get(t, srv, "/jobs/1?q=+spider+")
+	if b.searched != "spider" {
+		t.Errorf("searched %q; want the trimmed name", b.searched)
+	}
+	for _, want := range []string{
+		`<details class="search" open>`, `value="spider"`,
+		`<a href="/jobs/1?tmdb=559">`, "<strong>Spider-Man 3</strong>", "2007",
+		`<a href="/jobs/1?tmdb=557">`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("search results are missing %q", want)
+		}
+	}
+	if b.movie != nil || b.approved != nil {
+		t.Error("searching changed the job")
+	}
+
+	_, body = get(t, srv, "/jobs/1?tmdb=559")
+	for _, want := range []string{
+		"Spider-Man 3", "Chosen here: it is saved when you rip.", "Keep The Matrix (1999)",
+		`<input type="hidden" name="tmdb_id" value="559">`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the picked movie: page is missing %q", want)
+		}
+	}
+
+	if _, body := get(t, srv, "/jobs/1?q=broken"); !strings.Contains(body, "The search failed: radarr is down") {
+		t.Error("a failed search isn't explained")
+	}
+	if _, body := get(t, srv, "/jobs/1?q=nothing"); !strings.Contains(body, "No movie matches “nothing”.") {
+		t.Error("an empty search isn't explained")
+	}
+	if _, body := get(t, srv, "/jobs/1?tmdb=12345"); !strings.Contains(body, "TMDb 12345 couldn&#39;t be looked up") ||
+		!strings.Contains(body, `name="tmdb_id" value="603"`) {
+		t.Error("an unknown id must be explained, keeping the movie Discern found")
+	}
+	// A rejected approval shows the page again with the pick still there.
+	b.failNext = errors.New("choose at least one title")
+	_, body = do(t, srv, "POST", "/jobs/1/approve", url.Values{"tmdb_id": {"559"}}, true, nil)
+	if !strings.Contains(body, `name="tmdb_id" value="559"`) {
+		t.Error("a rejected approval lost the movie picked on the page")
+	}
+}
+
+// A search or pick sent from another website (an image tag, say) isn't
+// run: it would make Discern ask Radarr and save posters.
+func TestReviewSearchFromAnotherSiteIsIgnored(t *testing.T) {
+	b := newBackend()
+	srv := newServer(t, b)
+	cross := map[string]string{"Sec-Fetch-Site": "cross-site"}
+	_, body := do(t, srv, "GET", "/jobs/1?q=spider&tmdb=559", nil, true, cross)
+	if b.searched != "" || strings.Contains(body, "Spider-Man") {
+		t.Errorf("a cross-site search ran (searched %q)", b.searched)
+	}
+	if !strings.Contains(body, "The Matrix (1999)") {
+		t.Error("the page itself should still show")
+	}
+	if do(t, srv, "GET", "/jobs/1?q=spider", nil, true, map[string]string{"Sec-Fetch-Site": "same-origin"}); b.searched != "spider" {
+		t.Error("a search from Discern's own page didn't run")
+	}
+}
+
+// A refused approval comes back as the user left it: their titles, this
+// disc's languages and the switch, not the saved job's.
+func TestARefusedApprovalKeepsTheForm(t *testing.T) {
+	b := newBackend()
+	srv := newServer(t, b)
+	b.failNext = errors.New("choose at least one audio language")
+	_, body := do(t, srv, "POST", "/jobs/1/approve", url.Values{"title": {"1"}, "disc_langs": {"on"}, "disc_commentary": {"on"}}, true, nil)
+	for _, want := range []string{
+		"choose at least one audio language",
+		`<input type="checkbox" name="title" value="1" checked>`, `<input type="checkbox" name="title" value="0">`,
+		`id="disc-langs" checked`, `name="disc_commentary" value="on" checked`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page shown again is missing %q", want)
+		}
+	}
+}
+
+// A disc's own saved choice (before a Retry) is shown, switch on, so
+// approving as shown keeps it.
+func TestReviewShowsTheDiscsSavedLanguages(t *testing.T) {
+	b := newBackend()
+	b.jobs[1].Languages = &lang.Choice{Audio: []string{"eng"}, Commentary: true}
+	_, body := get(t, newServer(t, b), "/jobs/1")
+	if !strings.Contains(body, `<details class="group disc-langs" open>`) || !strings.Contains(body, `id="disc-langs" checked`) ||
+		!strings.Contains(body, `name="disc_commentary" value="on" checked`) {
+		t.Error("the disc's saved languages aren't shown")
+	}
+}
+
+// Unreadable Settings are said on the review page, not shown as "All
+// tracks": the rip would fail on them.
+func TestReviewWithUnreadableSettings(t *testing.T) {
+	b := newBackend()
+	b.settingsErr = errors.New("settings row doesn't parse")
+	_, body := get(t, newServer(t, b), "/jobs/1")
+	if !strings.Contains(body, `<p class="alert">The Settings page&#39;s languages can&#39;t be read`) || strings.Contains(body, "All tracks") {
+		t.Error("unreadable Settings aren't reported on the review page")
+	}
+}
+
+// With no movie found, the search is offered as finding it, open.
+func TestReviewWithoutAMovie(t *testing.T) {
+	b := newBackend()
+	b.jobs[1].Movie = nil
+	_, body := get(t, newServer(t, b), "/jobs/1")
+	if !strings.Contains(body, `<details class="search" open>`) || !strings.Contains(body, "<summary>Find the movie</summary>") ||
+		strings.Contains(body, "Wrong movie?") || !strings.Contains(body, `name="tmdb_id" value=""`) {
+		t.Error("without a movie, the page should offer to find it")
+	}
+}
+
+// This disc's languages (decision D34): only with "Choose languages for this
+// disc" ticked are they sent with the approval; otherwise Settings apply.
+func TestReviewDiscLanguages(t *testing.T) {
+	b := newBackend()
+	b.settings = &settings.Settings{Languages: &settings.Languages{Audio: []string{"eng"}, Subtitles: []string{"eng"}, ForcedOnly: true}}
+	srv := newServer(t, b)
+	_, body := get(t, srv, "/jobs/1")
+	for _, want := range []string{
+		"Audio English · Subtitles English, forced only", "Change for this disc",
+		`<fieldset class="disc-only" data-enabled-by="disc-langs">`, `<script src="/static/toggle.js" defer></script>`,
+		`name="disc_audio" value="eng" checked`, // the title's own English, ticked as Settings have it
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("review page is missing %q", want)
+		}
+	}
+
+	do(t, srv, "POST", "/jobs/1/approve", url.Values{"title": {"0"}, "disc_audio": {"eng"}}, true, nil)
+	if b.discLangs != nil {
+		t.Errorf("languages sent without the switch: %+v", b.discLangs)
+	}
+	do(t, srv, "POST", "/jobs/1/approve", url.Values{"title": {"0"}, "disc_langs": {"on"},
+		"disc_audio": {"jpn", "eng"}, "disc_subtitles": {"eng"}, "disc_forced": {"on"}}, true, nil)
+	want := &settings.Languages{Audio: []string{"jpn", "eng"}, Subtitles: []string{"eng"}, ForcedOnly: true}
+	if !reflect.DeepEqual(b.discLangs, want) {
+		t.Errorf("disc languages = %+v; want %+v", b.discLangs, want)
 	}
 }
 
@@ -641,11 +808,13 @@ func TestSettingsPage(t *testing.T) {
 	// The script that disables the group is a file of Discern's own: the
 	// Content-Security-Policy allows no inline script.
 	_, page := do(t, srv, "GET", "/settings", nil, true, nil)
-	if !strings.Contains(page, `<script src="/static/settings.js" defer></script>`) || !strings.Contains(page, `<fieldset class="chosen-only" id="chosen-languages">`) {
-		t.Error("the page doesn't load settings.js or has no group for it to disable")
+	if !strings.Contains(page, `<script src="/static/toggle.js" defer></script>`) ||
+		!strings.Contains(page, `<fieldset class="chosen-only" data-enabled-by="languages-chosen">`) ||
+		!strings.Contains(page, `id="languages-chosen"`) {
+		t.Error("the page doesn't load toggle.js or has no group for it to disable")
 	}
-	if resp, js := do(t, srv, "GET", "/static/settings.js", nil, true, nil); resp.StatusCode != 200 || !strings.Contains(js, "chosen-languages") {
-		t.Errorf("/static/settings.js: %d", resp.StatusCode)
+	if resp, js := do(t, srv, "GET", "/static/toggle.js", nil, true, nil); resp.StatusCode != 200 || !strings.Contains(js, "data-enabled-by") {
+		t.Errorf("/static/toggle.js: %d", resp.StatusCode)
 	}
 
 	// Like every change, a cross-site POST is refused.
@@ -691,7 +860,7 @@ func TestApproveWithoutAMovieSaysHowToChooseOne(t *testing.T) {
 	b.failNext = fmt.Errorf("approving: %w", jobs.ErrNoMovie)
 	srv := newServer(t, b)
 	resp, body := do(t, srv, "POST", "/jobs/1/approve", url.Values{"title": {"0"}}, true, map[string]string{"Origin": srv.URL})
-	if resp.StatusCode != 422 || !strings.Contains(body, "type its TMDb id in the box above the titles") {
+	if resp.StatusCode != 422 || !strings.Contains(body, "search for it by name above the titles") {
 		t.Errorf("approve without a movie: %d; want 422 and how to choose the movie", resp.StatusCode)
 	}
 }

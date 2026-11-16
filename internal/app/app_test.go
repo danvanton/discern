@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -150,7 +151,7 @@ func TestADiscGoesFromTrayToRadarr(t *testing.T) {
 		t.Errorf("suggested titles %v, want [0] (the longest)", waiting.Titles)
 	}
 
-	if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil); err != nil {
+	if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	w.waitFor(t, j.ID, jobs.Done)
@@ -175,7 +176,7 @@ func TestShutdownMidRipThenRestartFinishesTheJob(t *testing.T) {
 	ctx := context.Background()
 	j, _ := w.app.DiscInserted(ctx, "/dev/sr0")
 	waiting := w.waitFor(t, j.ID, jobs.NeedsYou)
-	w.app.Approve(ctx, j.ID, waiting.Titles, nil)
+	w.app.Approve(ctx, j.ID, waiting.Titles, nil, nil)
 	w.waitFor(t, j.ID, jobs.Ripping)
 	time.Sleep(150 * time.Millisecond) // part-way through
 
@@ -220,7 +221,7 @@ func TestEjectOnlyWhenDone(t *testing.T) {
 		ctx := context.Background()
 		j, _ := w.app.DiscInserted(ctx, "/dev/sr0")
 		waiting := w.waitFor(t, j.ID, jobs.NeedsYou)
-		w.app.Approve(ctx, j.ID, waiting.Titles, nil)
+		w.app.Approve(ctx, j.ID, waiting.Titles, nil, nil)
 		want := jobs.Done
 		if fail {
 			want = jobs.Failed
@@ -294,7 +295,7 @@ func (w *world) rip(t *testing.T, want jobs.State) *jobs.Job {
 		t.Fatal(err)
 	}
 	waiting := w.waitFor(t, j.ID, jobs.NeedsYou)
-	if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil); err != nil {
+	if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	done := w.waitFor(t, j.ID, want)
@@ -360,6 +361,61 @@ func TestAForeignTitleKeepsItsOwnAudio(t *testing.T) {
 	b, _ := os.ReadFile(w.app.MakeMKVSettings)
 	if !strings.Contains(string(b), "+sel:(audio&(jpn|eng|fre|nolang|single))") || !strings.Contains(string(b), "+sel:(subtitle&(jpn))") {
 		t.Errorf("settings.conf = %q; want the title's own eng and fre audio added after jpn, subtitles as chosen", b)
+	}
+}
+
+// A disc's own languages (decision D34) win over the Settings page's, are
+// used exactly (no foreign-film fallback), and tell Verify the rip is
+// trimmed even with MakeMKV's default on the Settings page.
+func TestADiscsOwnLanguagesAreUsedForItsRip(t *testing.T) {
+	w := newWorld(t, 0, "")
+	ctx := context.Background()
+	if err := w.app.SaveSettings(ctx, settings.Settings{Eject: true, Languages: &settings.Languages{Audio: []string{"ger"}}}); err != nil {
+		t.Fatal(err)
+	}
+	j, err := w.app.DiscInserted(ctx, "/dev/sr0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := w.waitFor(t, j.ID, jobs.NeedsYou)
+	disc := &settings.Languages{Audio: []string{"jpn"}, Subtitles: []string{"eng"}, ForcedOnly: true}
+	if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil, disc); err != nil {
+		t.Fatal(err)
+	}
+	done := w.waitFor(t, j.ID, jobs.Done)
+	w.app.Wait(5 * time.Second)
+	b, _ := os.ReadFile(w.app.MakeMKVSettings)
+	if !strings.Contains(string(b), "+sel:(audio&(jpn|nolang|single)),+sel:(subtitle&(eng)&forced)") {
+		t.Errorf("settings.conf = %q; want exactly the disc's choice: jpn audio, forced eng subtitles", b)
+	}
+	if !reflect.DeepEqual(done.Languages, disc) {
+		t.Errorf("job's languages = %+v; want them saved with it", done.Languages)
+	}
+
+	// Verify expects a trimmed file for this job, whatever Settings say.
+	if err := w.app.SaveSettings(ctx, settings.Settings{Eject: true}); err != nil {
+		t.Fatal(err)
+	}
+	if trimmed, err := w.app.LanguagesChosen(ctx, done); err != nil || !trimmed {
+		t.Errorf("LanguagesChosen = %v, %v; want true for a job with its own languages", trimmed, err)
+	}
+	if trimmed, _ := w.app.LanguagesChosen(ctx, &jobs.Job{}); trimmed {
+		t.Error("a job without its own languages, with MakeMKV's default: trimmed")
+	}
+}
+
+func TestApproveRefusesBadDiscLanguages(t *testing.T) {
+	w := newWorld(t, 0, "")
+	ctx := context.Background()
+	j, _ := w.app.DiscInserted(ctx, "/dev/sr0")
+	waiting := w.waitFor(t, j.ID, jobs.NeedsYou)
+	for _, bad := range []*settings.Languages{{}, {Audio: []string{"xx"}}, {Audio: []string{"eng", "eng"}}} {
+		if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil, bad); err == nil {
+			t.Errorf("languages %+v were accepted", bad)
+		}
+	}
+	if got, _ := w.store.Job(ctx, j.ID); got.State != jobs.NeedsYou {
+		t.Errorf("state = %s; a refused approval must leave the job waiting", got.State)
 	}
 }
 

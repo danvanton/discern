@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/danvanton/discern/internal/drive"
 	"github.com/danvanton/discern/internal/jobs"
@@ -176,8 +178,15 @@ func (a *App) OnDisc(ctx context.Context, drive string) {
 	}
 }
 
-func (a *App) Approve(ctx context.Context, id int64, titles []int, movie *jobs.Movie) error {
-	if err := a.engine.Approve(ctx, id, titles, movie); err != nil {
+// Approve starts the rip of the chosen titles. langs, if not nil, is this
+// disc's own track choice (decision D34), checked like the Settings page's.
+func (a *App) Approve(ctx context.Context, id int64, titles []int, movie *jobs.Movie, langs *settings.Languages) error {
+	if langs != nil {
+		if err := langs.Validate(); err != nil {
+			return err
+		}
+	}
+	if err := a.engine.Approve(ctx, id, titles, movie, langs); err != nil {
 		return err
 	}
 	// The user may have chosen a different movie: its poster is wanted now,
@@ -220,16 +229,27 @@ func (a *App) Resume(ctx context.Context) error {
 	// Posters that failed, or jobs from before posters existed: the
 	// dashboard shows the active jobs and the recent ones. A poster is
 	// decoration, so a failed read here is logged, never a reason not to start.
+	// Posters no job on the dashboard uses (search results nobody picked,
+	// jobs too old to be listed) are removed; a job's page fetches its
+	// own again if it is viewed.
 	active, err := a.store.ActiveJobs(ctx)
 	if err == nil {
 		var recent []*jobs.Job
-		recent, err = a.store.RecentJobs(ctx, RecentShown)
-		for _, j := range append(active, recent...) {
-			a.fetchPoster(j.Movie)
+		if recent, err = a.store.RecentJobs(ctx, RecentShown); err == nil {
+			keep := map[int]bool{}
+			for _, j := range append(active, recent...) {
+				if j.Movie != nil {
+					keep[j.Movie.TMDbID] = true
+				}
+				a.fetchPoster(j.Movie)
+			}
+			if a.Posters != nil {
+				err = a.Posters.Prune(keep)
+			}
 		}
 	}
 	if err != nil {
-		a.log.Warn("not fetching missing posters at start", "err", err)
+		a.log.Warn("not tidying the posters at start", "err", err)
 	}
 	return nil
 }
@@ -250,6 +270,60 @@ func (a *App) fetchPoster(m *jobs.Movie) {
 		defer a.wg.Done()
 		a.Posters.Fetch(a.base, m.TMDbID) // logs its own failure
 	}()
+}
+
+// Limits on the review page's movie search (decision D33).
+const (
+	maxSearchTerm    = 100 // characters, as for the disc's own name
+	maxSearchResults = 8
+	searchPosterWait = 3 * time.Second
+)
+
+// SearchMovies finds movies by name through Radarr's lookup, for the user
+// correcting an identification (decision D33). Their posters are fetched
+// meanwhile, and the results wait for them at most searchPosterWait. A
+// slower poster isn't cut off: it finishes in the background and shows on
+// a later view, so picking that movie doesn't leave it without one.
+func (a *App) SearchMovies(ctx context.Context, term string) ([]jobs.Movie, error) {
+	term = strings.TrimSpace(term)
+	if term == "" {
+		return nil, errors.New("type part of the movie's name")
+	}
+	if utf8.RuneCountInString(term) > maxSearchTerm {
+		return nil, fmt.Errorf("the search is over %d characters", maxSearchTerm)
+	}
+	found, err := a.radarr.Lookup(ctx, term)
+	if err != nil {
+		return nil, err
+	}
+	var out []jobs.Movie
+	var wg sync.WaitGroup
+	for _, m := range found {
+		if m.TMDbID <= 0 || len(out) == maxSearchResults {
+			continue
+		}
+		out = append(out, jobs.Movie{TMDbID: m.TMDbID, Title: m.Title, Year: m.Year})
+		if a.Posters == nil || a.base.Err() != nil || m.PosterURL() == "" {
+			continue
+		}
+		// On the app's context, tracked by a.wg, so shutdown waits for it and
+		// a slow poster isn't cut off when the page stops waiting.
+		wg.Add(1)
+		a.wg.Add(1)
+		go func(id int, raw string) {
+			defer a.wg.Done()
+			defer wg.Done()
+			a.Posters.FetchFrom(a.base, id, raw) // logs its own failure
+		}(m.TMDbID, m.PosterURL())
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(searchPosterWait):
+	case <-ctx.Done():
+	}
+	return out, nil
 }
 
 // PosterURL is the poster's address according to Radarr's lookup, for

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -175,6 +176,35 @@ func TestFoundPostersAreRemembered(t *testing.T) {
 	}
 }
 
+// Prune keeps the posters asked for, removes the rest and any half-written
+// file, and leaves other files alone.
+func TestPrune(t *testing.T) {
+	c := New(t.TempDir(), nil, nil)
+	for _, name := range []string{"603.jpg", "559.png", "157.jpg", ".poster-123", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(c.Dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.File(559) // remembered: must be forgotten when pruned
+	if err := c.Prune(map[int]bool{603: true, 157: true}); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(c.Dir)
+	var left []string
+	for _, e := range entries {
+		left = append(left, e.Name())
+	}
+	if want := []string{"157.jpg", "603.jpg", "notes.txt"}; !slices.Equal(left, want) {
+		t.Errorf("left %v; want %v", left, want)
+	}
+	if _, _, ok := c.File(559); ok {
+		t.Error("a pruned poster is still remembered")
+	}
+	if err := New(filepath.Join(t.TempDir(), "none"), nil, nil).Prune(nil); err != nil {
+		t.Errorf("pruning a cache never written: %v", err)
+	}
+}
+
 func TestFetchRefusesARedirectAway(t *testing.T) {
 	img := pngBytes(t)
 	c, _, _ := newCache(t, "https://image.tmdb.org/t/p/original/a.jpg", func(w http.ResponseWriter, r *http.Request) {
@@ -189,6 +219,26 @@ func TestFetchRefusesARedirectAway(t *testing.T) {
 	}
 	if _, _, ok := c.File(603); ok {
 		t.Error("the image from the other host was kept")
+	}
+}
+
+// A search result's poster address is used as given, without asking Radarr,
+// and checked like any other.
+func TestFetchFromAKnownAddress(t *testing.T) {
+	img := pngBytes(t)
+	c, _, path := newCache(t, "", func(w http.ResponseWriter, r *http.Request) { w.Write(img) })
+	c.URL = func(context.Context, int) (string, error) {
+		t.Error("Radarr was asked for an address already known")
+		return "", errors.New("unused")
+	}
+	if err := c.FetchFrom(context.Background(), 603, "https://image.tmdb.org/t/p/original/known.png"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := path.Load().(string); p != "/t/p/w342/known.png" {
+		t.Errorf("fetched %s", p)
+	}
+	if err := c.FetchFrom(context.Background(), 604, "https://example.com/t/p/original/x.png"); err == nil {
+		t.Error("a known address on another host was fetched")
 	}
 }
 

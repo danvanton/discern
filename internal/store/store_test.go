@@ -12,6 +12,7 @@ import (
 
 	"github.com/danvanton/discern/internal/jobs"
 	"github.com/danvanton/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/settings"
 )
 
 func openTest(t *testing.T) (*Store, string) {
@@ -106,6 +107,30 @@ func TestMoveSavesFieldsAndHistory(t *testing.T) {
 	if len(events) != 2 || events[0].To != jobs.Detected || events[1].From != jobs.Detected ||
 		events[1].To != jobs.Scanning || events[1].Note != "starting" {
 		t.Errorf("events = %+v", events)
+	}
+}
+
+// A disc's own languages (decision D34) are saved with its job, and nil
+// (the Settings page's choice) reads back as nil.
+func TestMoveSavesTheDiscsLanguages(t *testing.T) {
+	s, _ := openTest(t)
+	j, _ := s.CreateJob(ctx, "/dev/sr0")
+	if got, _ := s.Job(ctx, j.ID); got.Languages != nil {
+		t.Errorf("a new job has languages %+v", got.Languages)
+	}
+	j.Languages = &settings.Languages{Audio: []string{"eng", "jpn"}, Subtitles: []string{"eng"}, ForcedOnly: true}
+	if err := s.Move(ctx, j, jobs.Scanning, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Job(ctx, j.ID); !reflect.DeepEqual(got.Languages, j.Languages) {
+		t.Errorf("languages = %+v; want %+v", got.Languages, j.Languages)
+	}
+	j.Languages = nil
+	if err := s.Move(ctx, j, jobs.Identifying, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Job(ctx, j.ID); got.Languages != nil {
+		t.Errorf("cleared languages read back %+v", got.Languages)
 	}
 }
 

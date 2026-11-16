@@ -258,9 +258,51 @@ form.panel button.primary { margin-top: 1rem; }
 .langs label { white-space: nowrap; }
 .settings input[type="checkbox"], .settings input[type="radio"] { padding: 0; }
 /* The language choices do nothing while MakeMKV's default selection is on.
-   settings.js disables the whole group then; these rules dim it, and stand
+   toggle.js disables the whole group then; these rules dim it, and stand
    in (dimmed, no clicks) if the script didn't run. */
 .settings fieldset.chosen-only { border: 0; margin: 0; padding: 0; min-width: 0; }
-.settings fieldset.chosen-only:disabled,
-.settings:has(input[name="languages"][value="default"]:checked) .chosen-only { opacity: 0.4; pointer-events: none; }
+fieldset[data-enabled-by]:disabled,
+.settings:has(input[name="languages"][value="default"]:checked) .chosen-only,
+.review:has(#disc-langs:not(:checked)) .disc-only { opacity: 0.4; pointer-events: none; }
 p.saved { border-left: 3px solid var(--good, var(--accent)); padding-left: 0.6rem; }
+
+/* The review page (decisions D32-D34) */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+.review h2 { margin-top: 1.25rem; }
+.review h2:first-of-type { margin-top: 0; }
+/* A title is one big tap target: the whole row is its label. */
+.title-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 0.2rem 0.75rem;
+  align-items: start;
+  padding: 0.6rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  margin: 0;
+  font-weight: normal;
+  cursor: pointer;
+}
+.title-row.chosen { background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: 6px; }
+.title-row input { width: 1.25rem; height: 1.25rem; margin: 0.15rem 0 0; }
+.title-len { font-weight: 700; font-variant-numeric: tabular-nums; }
+.title-info { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+details.group { margin: 0.75rem 0; }
+details.group > summary { cursor: pointer; font-weight: 600; padding: 0.4rem 0; }
+.disc-only { border: 0; margin: 0; padding: 0; min-width: 0; }
+
+.movie .pick { display: flex; gap: 0.9rem; align-items: flex-start; }
+details.search { margin-top: 0.5rem; }
+details.search > summary, details.by-id > summary { cursor: pointer; color: var(--accent); padding: 0.3rem 0; }
+.search-form { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
+.search-form input { flex: 1; min-width: 0; min-height: 2.5rem; }
+.results { list-style: none; padding: 0; margin: 0.25rem 0 0.75rem; }
+.results a {
+  display: flex; gap: 0.75rem; align-items: center;
+  padding: 0.4rem 0; border-bottom: 1px solid var(--line);
+  color: inherit; text-decoration: none;
+}
+.results a:hover strong { color: var(--accent); }
+.results .poster { width: 36px; height: 54px; }

@@ -3,6 +3,7 @@ package jobs
 import (
 	"time"
 
+	"github.com/danvanton/discern/internal/lang"
 	"github.com/danvanton/discern/internal/makemkv"
 )
 
@@ -15,6 +16,9 @@ type Job struct {
 	Disc   *makemkv.Disc // what the scan found; nil before Scanning finishes
 	Movie  *Movie        // which movie it is; nil if unknown
 	Titles []int         // the titles chosen to rip
+	// Languages is this disc's own track choice, made on the review page
+	// (decision D34); nil means the Settings page's choice applies.
+	Languages *lang.Choice
 
 	// Why the job is waiting in NeedsYou, or why it failed, in one sentence
 	// for the UI.

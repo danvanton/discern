@@ -13,21 +13,7 @@
 {{if .Error}}<p class="alert" role="alert">{{.Error}}</p>{{end}}
 
 {{if waiting .Job.State}}
-<form method="post" action="/jobs/{{.Job.ID}}/approve" class="panel ask">
-  <h2>Check and approve</h2>
-  {{if .Job.Note}}<p>Suggested: {{.Job.Note}}.</p>{{end}}
-  <p>
-    <span class="field">Movie</span>
-    <strong>{{movieName .Job.Movie}}</strong>
-  </p>
-  <p>
-    <label for="tmdb">TMDb id</label>
-    <input id="tmdb" name="tmdb_id" inputmode="numeric" pattern="[0-9]*" value="{{with .Job.Movie}}{{.TMDbID}}{{end}}">
-    <span class="muted small">Change it if the movie is wrong. The id is the number in the movie's address on themoviedb.org.</span>
-  </p>
-  {{template "titles" .}}
-  <button type="submit" class="primary">Rip and import</button>
-</form>
+{{template "review" .}}
 {{else}}
 {{template "status" .}}
 {{if .Job.Disc}}
@@ -108,4 +94,114 @@
   </tbody>
 </table>
 </div>
+{{end}}
+
+{{/* The review page (decisions D32-D34). The movie search is a form of its
+     own, outside the approve form: forms can't be nested. Choosing a result
+     only changes the address (?tmdb=); nothing is saved until the rip is
+     approved. */}}
+{{define "review"}}
+{{$id := .Job.ID}}{{$rv := .Review}}
+<section class="panel movie">
+  <h2>Movie</h2>
+  {{with $rv.Pick}}
+  <div class="pick">
+    {{if .Poster}}<img class="poster" src="/posters/{{.TMDbID}}" alt="" width="342" height="513">{{else}}<span class="poster none" aria-hidden="true"></span>{{end}}
+    <div>
+      <p class="card-title">{{.Title}}</p>
+      <p class="muted small">{{if .Year}}{{.Year}} · {{end}}TMDb {{.TMDbID}}</p>
+      <p class="small">Chosen here: it is saved when you rip. <a href="/jobs/{{$id}}">Keep {{movieName $.Job.Movie}}</a></p>
+    </div>
+  </div>
+  {{else}}{{with .Job.Movie}}
+  <p><strong>{{movieName .}}</strong> <span class="muted small">TMDb {{.TMDbID}}</span></p>
+  {{else}}
+  <p class="note">Discern couldn't tell which movie this is. Search for it below.</p>
+  {{end}}{{end}}
+  <details class="search"{{if or $rv.Search (not .Job.Movie)}} open{{end}}>
+    <summary>{{if .Job.Movie}}Wrong movie? Search{{else}}Find the movie{{end}}</summary>
+    <form method="get" action="/jobs/{{$id}}" role="search" class="search-form">
+      <input name="q" aria-label="Movie name" placeholder="Movie name" maxlength="100" value="{{with $rv.Search}}{{.Query}}{{end}}">
+      <button type="submit">Search</button>
+    </form>
+    {{with $rv.Search}}
+    {{if .Err}}<p class="alert" role="alert">The search failed: {{.Err}}</p>
+    {{else if .Results}}
+    <ul class="results">
+      {{range .Results}}
+      <li><a href="/jobs/{{$id}}?tmdb={{.TMDbID}}">
+        {{if .Poster}}<img class="poster" src="/posters/{{.TMDbID}}" alt="" width="342" height="513">{{else}}<span class="poster none" aria-hidden="true"></span>{{end}}
+        <span><strong>{{.Title}}</strong>{{if .Year}} <span class="muted">{{.Year}}</span>{{end}}</span>
+      </a></li>
+      {{end}}
+    </ul>
+    {{else}}<p class="muted">No movie matches “{{.Query}}”.</p>{{end}}
+    {{end}}
+    <details class="by-id">
+      <summary>Know its TMDb id?</summary>
+      <form method="get" action="/jobs/{{$id}}" class="search-form">
+        <input name="tmdb" aria-label="TMDb id" inputmode="numeric" pattern="[0-9]*" placeholder="603">
+        <button type="submit">Use this id</button>
+      </form>
+      <p class="muted small">The number in the movie's address on themoviedb.org.</p>
+    </details>
+  </details>
+</section>
+
+<form method="post" action="/jobs/{{$id}}/approve" class="panel ask review">
+  <input type="hidden" name="tmdb_id" value="{{if $rv.Movie}}{{$rv.Movie}}{{end}}">
+  <h2>Titles to rip</h2>
+  {{range $rv.Groups.Main}}{{template "titlerow" .}}{{end}}
+  {{if .Job.Note}}<p class="muted small">Suggested because {{.Job.Note}}.</p>{{end}}
+  {{with $rv.Groups.Cuts}}
+  <details class="group" open><summary>Possible other cuts ({{len .}})</summary>
+    <p class="muted small">Nearly as long as the title above: perhaps another cut of the movie.</p>
+    {{range .}}{{template "titlerow" .}}{{end}}
+  </details>
+  {{end}}
+  {{with $rv.Groups.Extras}}
+  <details class="group"><summary>Extras ({{len .}})</summary>{{range .}}{{template "titlerow" .}}{{end}}</details>
+  {{end}}
+  {{with $rv.Groups.Clips}}
+  <details class="group"><summary>Short clips, under 2 minutes ({{len .}})</summary>{{range .}}{{template "titlerow" .}}{{end}}</details>
+  {{end}}
+
+  <h2>Languages</h2>
+  <p{{if $rv.Langs.Unreadable}} class="alert"{{end}}>{{$rv.Langs.Summary}}{{if not $rv.Langs.Unreadable}} <span class="muted small">· from Settings</span>{{end}}</p>
+  <details class="group disc-langs"{{if $rv.Langs.On}} open{{end}}>
+    <summary>Change for this disc</summary>
+    <p><label><input type="checkbox" name="disc_langs" value="on" id="disc-langs"{{if $rv.Langs.On}} checked{{end}}> Choose languages for this disc</label></p>
+    <p class="muted small">The choice applies to every title ticked above.</p>
+    <fieldset class="disc-only" data-enabled-by="disc-langs">
+      <legend class="visually-hidden">This disc's languages</legend>
+      {{if $rv.Langs.Audio}}
+      <p class="field">Audio</p>
+      <div class="langs">{{range $rv.Langs.Audio}}<label><input type="checkbox" name="disc_audio" value="{{.Code}}"{{if .On}} checked{{end}}> {{.Name}}</label>
+      {{end}}</div>
+      {{else}}<p class="muted small">The chosen titles name no audio language Discern knows: their audio is kept as MakeMKV's default would.</p>{{end}}
+      {{if $rv.Langs.Subtitles}}
+      <p class="field">Subtitles</p>
+      <div class="langs">{{range $rv.Langs.Subtitles}}<label><input type="checkbox" name="disc_subtitles" value="{{.Code}}"{{if .On}} checked{{end}}> {{.Name}}</label>
+      {{end}}</div>
+      <p><label><input type="checkbox" name="disc_forced" value="on"{{if $rv.Langs.ForcedOnly}} checked{{end}}> Forced subtitles only</label></p>
+      {{end}}
+      <p><label><input type="checkbox" name="disc_commentary" value="on"{{if $rv.Langs.Commentary}} checked{{end}}> Keep commentary tracks</label></p>
+    </fieldset>
+  </details>
+
+  <button type="submit" class="primary">Rip and import</button>
+</form>
+<script src="/static/toggle.js" defer></script>
+{{end}}
+
+{{/* One title on the review page: a big tick box, its length, size and
+     picture, and its languages. */}}
+{{define "titlerow"}}
+<label class="title-row{{if .Chosen}} chosen{{end}}">
+  <input type="checkbox" name="title" value="{{.Index}}"{{if .Chosen}} checked{{end}}>
+  <span class="title-len">{{clock .Duration}}</span>
+  <span class="title-info">{{bytes .SizeBytes}} · {{.Chapters}} chapters{{with res .Title}} · {{.}}{{end}}{{if .MakeMKVMainFeature}} · <span class="badge ask" title="MakeMKV marked this as the main feature">main</span>{{end}}
+    <span class="muted small">Title {{.Index}}{{with .SourceFile}} · {{.}}{{end}}{{with audio .Title}} · {{.}}{{end}}</span>
+  </span>
+</label>
 {{end}}

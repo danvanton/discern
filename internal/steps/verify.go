@@ -38,7 +38,7 @@ const (
 func (s *Steps) Verify(ctx context.Context, j *jobs.Job, dir string) error {
 	floor := minSizeRatio
 	if s.Trimmed != nil {
-		trimmed, err := s.Trimmed(ctx)
+		trimmed, err := s.Trimmed(ctx, j)
 		if err != nil {
 			return fmt.Errorf("reading the language settings: %w", err)
 		}

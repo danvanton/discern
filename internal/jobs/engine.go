@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/danvanton/discern/internal/lang"
 	"github.com/danvanton/discern/internal/makemkv"
 )
 
@@ -236,7 +237,9 @@ func (e *Engine) failIn(ctx context.Context, j *Job, resumeIn State, what string
 //
 // movie, if not nil, replaces the identified movie: the user corrected it.
 // A job can't be approved without a movie, because the import needs one.
-func (e *Engine) Approve(ctx context.Context, id int64, titles []int, movie *Movie) error {
+// langs, if not nil, is this disc's own track choice (decision D34); nil
+// leaves the Settings page's choice in charge.
+func (e *Engine) Approve(ctx context.Context, id int64, titles []int, movie *Movie, langs *lang.Choice) error {
 	j, err := e.store.Job(ctx, id)
 	if err != nil {
 		return err
@@ -259,7 +262,7 @@ func (e *Engine) Approve(ctx context.Context, id int64, titles []int, movie *Mov
 	if j.Movie == nil {
 		return ErrNoMovie
 	}
-	j.Titles, j.Note = slices.Clone(titles), ""
+	j.Titles, j.Note, j.Languages = slices.Clone(titles), "", langs
 	return e.move(ctx, j, Ripping, fmt.Sprintf("approved titles %v", titles))
 }
 

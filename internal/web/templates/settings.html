@@ -15,10 +15,10 @@
   <fieldset>
     <legend>Languages</legend>
     <p><label><input type="radio" name="languages" value="default" {{if not .Settings.Languages}}checked{{end}}> MakeMKV's default selection</label></p>
-    <p><label><input type="radio" name="languages" value="chosen" {{if .Settings.Languages}}checked{{end}}> Only the languages chosen below</label></p>
+    <p><label><input type="radio" name="languages" value="chosen" id="languages-chosen" {{if .Settings.Languages}}checked{{end}}> Only the languages chosen below</label></p>
   </fieldset>
 
-  <fieldset class="chosen-only" id="chosen-languages">
+  <fieldset class="chosen-only" data-enabled-by="languages-chosen">
   <fieldset>
     <legend>Audio</legend>
     <div class="langs">
@@ -51,5 +51,5 @@
 
   <button type="submit" class="primary">Save</button>
 </form>
-<script src="/static/settings.js" defer></script>
+<script src="/static/toggle.js" defer></script>
 {{end}}
