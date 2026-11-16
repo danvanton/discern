@@ -20,6 +20,7 @@ import (
 
 	"github.com/danvanton/discern/internal/app"
 	"github.com/danvanton/discern/internal/config"
+	"github.com/danvanton/discern/internal/discdb"
 	"github.com/danvanton/discern/internal/drive"
 	"github.com/danvanton/discern/internal/importer"
 	"github.com/danvanton/discern/internal/jobs"
@@ -217,6 +218,14 @@ func run(log *slog.Logger) error {
 	jobSteps.Diagnostics = filepath.Join(cfg.DataDir, "diagnostics")
 	jobSteps.Secrets = []string{cfg.MakeMKVKey}
 	a.DiagnosticsDir = jobSteps.Diagnostics
+	// TheDiscDB's disc data (decision D38): the last good copy at once, then
+	// a refresh every day in the background. Discern works without it.
+	catalog := discdb.NewCatalog(cfg.DiscDBURL, filepath.Join(cfg.DataDir, "discdb"), log)
+	if err := catalog.LoadLocal(); err != nil {
+		log.Warn("the saved disc index can't be used; a fresh one is downloaded", "err", err)
+	}
+	a.Catalog = catalog
+	go catalog.Run(ctx)
 	if err := a.Resume(ctx); err != nil {
 		return fmt.Errorf("resuming jobs: %w", err)
 	}

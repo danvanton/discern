@@ -1,7 +1,11 @@
 // Command discern-index builds the compact TheDiscDB index Discern downloads
 // (decision D38) from a checkout of https://github.com/TheDiscDb/data:
 //
-//	discern-index -data ./thediscdb-data -source <commit> -out discdb-index.json.gz
+//	discern-index -data ./thediscdb-data -source <commit> -built <commit time> -out discdb-index.json.gz
+//
+// The index is stamped with -built, TheDiscDB's commit time, not the time it
+// is built: the same data then gives the same bytes and the same SHA-256,
+// so Discern downloads it again only when TheDiscDB changed.
 //
 // It writes the index and, next to it, its SHA-256 in the usual
 // "<hex>  <file name>" form. Records that don't parse are skipped and
@@ -25,19 +29,29 @@ func main() {
 	data := flag.String("data", "", "a checkout of TheDiscDb/data (the folder holding data/movie)")
 	out := flag.String("out", "discdb-index.json.gz", "the index to write")
 	source := flag.String("source", "", "TheDiscDB's commit, recorded in the index")
+	built := flag.String("built", "", "the index's date, RFC 3339: TheDiscDB's commit time (default: now)")
 	flag.Parse()
 	if *data == "" {
 		fmt.Fprintln(os.Stderr, "usage: discern-index -data <TheDiscDB checkout> [-out file] [-source commit]")
 		os.Exit(2)
 	}
-	if err := run(*data, *out, *source); err != nil {
+	when := time.Now()
+	if *built != "" {
+		t, err := time.Parse(time.RFC3339, *built)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "discern-index: -built:", err)
+			os.Exit(2)
+		}
+		when = t
+	}
+	if err := run(*data, *out, *source, when); err != nil {
 		fmt.Fprintln(os.Stderr, "discern-index:", err)
 		os.Exit(1)
 	}
 }
 
-func run(data, out, source string) error {
-	ix, rep, err := discdb.Build(data, source, time.Now())
+func run(data, out, source string, built time.Time) error {
+	ix, rep, err := discdb.Build(data, source, built)
 	if err != nil {
 		return err
 	}

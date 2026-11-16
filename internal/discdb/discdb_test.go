@@ -385,3 +385,18 @@ func TestMatchNeedsAShape(t *testing.T) {
 		t.Errorf("a disc with shapeless titles too didn't match on its shaped ones: %+v", m)
 	}
 }
+
+// The same data and date give the same bytes, so an unchanged TheDiscDB
+// publishes an unchanged checksum and nothing is downloaded again.
+func TestTheSameDataGivesTheSameIndex(t *testing.T) {
+	var a, b bytes.Buffer
+	if err := build(t).Write(&a); err != nil {
+		t.Fatal(err)
+	}
+	if err := build(t).Write(&b); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(a.Bytes(), b.Bytes()) {
+		t.Error("two builds of the same data differ")
+	}
+}

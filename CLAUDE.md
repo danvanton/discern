@@ -2,7 +2,7 @@
 
 Discern watches optical drives, works out which titles on a disc are the movie, rips them with MakeMKV (`makemkvcon`, run as a subprocess) and imports them into Radarr. It is written in Go 1.27 and is a single binary with a web UI.
 
-The design, every decision (D1–D41) and the reason for each are in `docs/DESIGN.md`. Read the relevant section before changing a part. When a change alters behaviour the design describes, update the design doc in the same change. New decisions get the next D-number in the decision log (section 17), marked Proposed until the owner accepts them.
+The design, every decision (D1–D42) and the reason for each are in `docs/DESIGN.md`. Read the relevant section before changing a part. When a change alters behaviour the design describes, update the design doc in the same change. New decisions get the next D-number in the decision log (section 17), marked Proposed until the owner accepts them.
 
 ## Layout
 
@@ -33,7 +33,7 @@ The design, every decision (D1–D41) and the reason for each are in `docs/DESIG
 | `testdata/discdb` | a few TheDiscDB records (MIT), track lists removed, for the `discdb` tests |
 | `Dockerfile`, `deploy/` | the image, and the compose example with its notes |
 | `scripts/update-makemkv-pin.sh` | pins a MakeMKV release after checking its signature; the weekly workflow runs it |
-| `.github/workflows` | CI, the release (tag → signed multi-arch image), the MakeMKV update check |
+| `.github/workflows` | CI, the release (tag → signed multi-arch image), the MakeMKV update check, the daily TheDiscDB index (release `discdb-index`) |
 
 ## Build and test
 

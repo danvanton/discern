@@ -66,6 +66,7 @@ Everything else is on the web UI's **Settings** page, saved in Discern's databas
 | `DISCERN_MAKEMKVCON` | (none) | use this makemkvcon instead of installing MakeMKV (development, with the fake) |
 | `DISCERN_DRIVES` | `/dev/sr0` | comma-separated |
 | `DISCERN_DRIVE_POLL` | `2s` | |
+| `DISCERN_DISCDB_URL` | Discern's daily TheDiscDB index | where to download [TheDiscDB](https://github.com/TheDiscDb/data)'s disc data from, once a day (a few MB, `https://` only); `off` to not download it |
 | `DISCERN_INSECURE_NO_AUTH` | `false` | development only: turns the login off |
 
 ## Legal

@@ -56,6 +56,7 @@
 
 {{define "health"}}
 <ul class="checks">
-  {{range .}}<li class="{{if .OK}}ok{{else}}bad{{end}}"><strong>{{.Name}}</strong> {{if .OK}}✓{{else}}✗{{end}} <span class="muted small">{{.Detail}}</span></li>{{end}}
+  {{range .Checks}}<li class="{{if .OK}}ok{{else}}bad{{end}}"><strong>{{.Name}}</strong> {{if .OK}}✓{{else}}✗{{end}} <span class="muted small">{{.Detail}}</span></li>{{end}}
 </ul>
+<p class="muted small">{{with .Index}}TheDiscDB: {{len .Discs}} discs known, from {{date .Built}}.{{else}}TheDiscDB: not downloaded yet. Discern works without it, and fetches it once a day.{{end}}</p>
 {{end}}

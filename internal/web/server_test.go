@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/danvanton/discern/internal/app"
+	"github.com/danvanton/discern/internal/discdb"
 	"github.com/danvanton/discern/internal/drive"
 	"github.com/danvanton/discern/internal/jobs"
 	"github.com/danvanton/discern/internal/lang"
@@ -48,6 +49,7 @@ type fakeBackend struct {
 	discLangs   *settings.Languages
 	searched    string
 	bundles     map[string]string // diagnostics bundle name → folder
+	discIndex   *discdb.Index
 }
 
 func newBackend() *fakeBackend {
@@ -162,6 +164,8 @@ func (f *fakeBackend) Live(d string) (makemkv.Live, bool) {
 }
 
 func (f *fakeBackend) DriveState(d string) drive.State { return f.trays[d] }
+
+func (f *fakeBackend) DiscIndex() *discdb.Index { return f.discIndex }
 
 func (f *fakeBackend) Diagnostics(name string) (string, bool) {
 	dir, ok := f.bundles[name]
@@ -811,6 +815,24 @@ func TestReadyzHidesDetails(t *testing.T) {
 	// The logged-in dashboard still shows them.
 	if _, body := get(t, srv, "/fragments/health"); !strings.Contains(body, "connection refused") {
 		t.Error("the dashboard's health fragment lost the details")
+	}
+}
+
+// The System list says whether TheDiscDB's index is there; it isn't a
+// readiness check, since Discern works without it.
+func TestHealthShowsTheDiscIndex(t *testing.T) {
+	b := newBackend()
+	srv := newServer(t, b)
+	if _, body := get(t, srv, "/fragments/health"); !strings.Contains(body, "TheDiscDB: not downloaded yet") {
+		t.Error("a missing index isn't said")
+	}
+	if resp, _ := do(t, srv, "GET", "/readyz", nil, false, nil); resp.StatusCode != 200 {
+		t.Errorf("readyz without an index: %d; want 200", resp.StatusCode)
+	}
+	// Built at midday UTC: the same date in nearly every time zone.
+	b.discIndex = &discdb.Index{Built: time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC), Discs: make([]discdb.Disc, 3112)}
+	if _, body := get(t, srv, "/fragments/health"); !strings.Contains(body, "TheDiscDB: 3112 discs known, from 16 Nov 2026.") {
+		t.Errorf("the index isn't shown")
 	}
 }
 

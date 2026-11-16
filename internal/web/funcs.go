@@ -22,6 +22,7 @@ var funcs = template.FuncMap{
 	"pct":   func(p float64) int { return int(p*100 + 0.5) },
 	"ago":   ago,
 	"when":  func(t time.Time) string { return t.Local().Format("2006-01-02 15:04:05") },
+	"date":  func(t time.Time) string { return t.Local().Format("2 Jan 2006") },
 	"label": stateLabel,
 	"kind":  stateKind,
 	"chosen": func(j *jobs.Job, idx int) bool {

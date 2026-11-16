@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/danvanton/discern/internal/discdb"
 	"github.com/danvanton/discern/internal/drive"
 	"github.com/danvanton/discern/internal/jobs"
 	"github.com/danvanton/discern/internal/makemkv"
@@ -51,6 +52,8 @@ type App struct {
 	Trays *drive.Tracker
 	// DiagnosticsDir is where stalled rips' evidence is saved (decision D37).
 	DiagnosticsDir string
+	// Catalog, if set, is TheDiscDB's disc data (decision D38).
+	Catalog *discdb.Catalog
 
 	base context.Context // runs end when this does (shutdown)
 	wg   sync.WaitGroup
@@ -384,6 +387,14 @@ func (a *App) Poster(tmdbID int) (path, contentType string, ok bool) {
 		a.fetchPoster(&jobs.Movie{TMDbID: tmdbID})
 	}
 	return path, contentType, ok
+}
+
+// DiscIndex is TheDiscDB's index in use, or nil when there is none yet.
+func (a *App) DiscIndex() *discdb.Index {
+	if a.Catalog == nil {
+		return nil
+	}
+	return a.Catalog.Index()
 }
 
 // Diagnostics returns the folder of the diagnostics bundle called name, if

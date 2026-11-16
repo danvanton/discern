@@ -188,3 +188,18 @@ func TestEULAOnlyAcceptsYes(t *testing.T) {
 		}
 	}
 }
+
+// TheDiscDB's index comes from Discern's release by default (decision D38);
+// "off" turns the download off, and only https is accepted.
+func TestDiscDBURL(t *testing.T) {
+	c, err := Load(env(minimal), files(nil))
+	if err != nil || c.DiscDBURL != "https://github.com/danvanton/discern/releases/download/discdb-index/discdb-index.json.gz" {
+		t.Errorf("default: %q, %v", c.DiscDBURL, err)
+	}
+	if c, err := Load(env(with(map[string]string{"DISCERN_DISCDB_URL": "OFF"})), files(nil)); err != nil || c.DiscDBURL != "" {
+		t.Errorf("off: %q, %v", c.DiscDBURL, err)
+	}
+	if _, err := Load(env(with(map[string]string{"DISCERN_DISCDB_URL": "http://example.com/i.json.gz"})), files(nil)); err == nil {
+		t.Error("a plain-http index address was accepted")
+	}
+}

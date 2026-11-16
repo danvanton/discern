@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/danvanton/discern/internal/app"
+	"github.com/danvanton/discern/internal/discdb"
 	"github.com/danvanton/discern/internal/drive"
 	"github.com/danvanton/discern/internal/jobs"
 	"github.com/danvanton/discern/internal/lang"
@@ -63,6 +64,8 @@ type Backend interface {
 	DriveState(drive string) drive.State
 	// Diagnostics returns the folder of a saved diagnostics bundle (D37).
 	Diagnostics(name string) (dir string, ok bool)
+	// DiscIndex is TheDiscDB's index in use, or nil (D38).
+	DiscIndex() *discdb.Index
 }
 
 // Options configures the server.
@@ -487,8 +490,15 @@ func (s *server) poster(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "", info.ModTime(), f)
 }
 
+// healthData is the dashboard's System list: the checks /readyz reports,
+// and TheDiscDB's index, which Discern works without, so it isn't one.
+type healthData struct {
+	Checks []app.Check
+	Index  *discdb.Index
+}
+
 func (s *server) healthFragment(w http.ResponseWriter, r *http.Request) {
-	s.render(w, http.StatusOK, "dashboard.html", "health", s.b.Health(r.Context()))
+	s.render(w, http.StatusOK, "dashboard.html", "health", healthData{Checks: s.b.Health(r.Context()), Index: s.b.DiscIndex()})
 }
 
 // Actions. Each one answers with a redirect (post, redirect, get), so the

@@ -14,6 +14,10 @@ import (
 	"time"
 )
 
+// DefaultDiscDBURL is where the daily workflow publishes TheDiscDB's index
+// (decision D38, .github/workflows/discdb-index.yml).
+const DefaultDiscDBURL = "https://github.com/danvanton/discern/releases/download/discdb-index/discdb-index.json.gz"
+
 // Config is every setting, after defaults.
 type Config struct {
 	Listen     string        // address for the web UI, e.g. ":8790"
@@ -26,6 +30,7 @@ type Config struct {
 	MakeMKVKey string        // written into MakeMKV's settings; empty leaves them alone
 	Drives     []string      // optical drives to watch
 	DrivePoll  time.Duration // how often drives are checked
+	DiscDBURL  string        // the TheDiscDB index to download daily (decision D38); empty: none
 
 	RadarrURL            string
 	RadarrAPIKey         string
@@ -60,6 +65,7 @@ func Load(getenv Getenv, readFile ReadFile) (Config, error) {
 		MakeMKVKey: r.secret("MAKEMKV_KEY"),
 		Drives:     r.list("DISCERN_DRIVES", "/dev/sr0"),
 		DrivePoll:  r.duration("DISCERN_DRIVE_POLL", 2*time.Second),
+		DiscDBURL:  r.str("DISCERN_DISCDB_URL", DefaultDiscDBURL),
 
 		RadarrURL:            r.str("DISCERN_RADARR_URL", ""),
 		RadarrAPIKey:         r.secret("DISCERN_RADARR_API_KEY"),
@@ -72,6 +78,11 @@ func Load(getenv Getenv, readFile ReadFile) (Config, error) {
 	}
 	// Folders are made absolute: the staging path is handed to Radarr, which
 	// can't resolve a path relative to Discern's working directory.
+	if strings.EqualFold(c.DiscDBURL, "off") {
+		c.DiscDBURL = ""
+	} else if !strings.HasPrefix(c.DiscDBURL, "https://") {
+		r.fail("DISCERN_DISCDB_URL must be an https:// address, or off")
+	}
 	c.DataDir = r.abs("DISCERN_DATA_DIR", c.DataDir)
 	c.StagingDir = r.abs("DISCERN_STAGING_DIR", c.StagingDir)
 	if c.LibraryDir != "" {

@@ -11,6 +11,8 @@
    - `secrets/radarr_api_key`
    - `secrets/discern_password` (at least 12 characters)
 
+Once a day Discern downloads TheDiscDB's disc data, a few MB, from Discern's own GitHub release `discdb-index` (built daily from [TheDiscDB](https://github.com/TheDiscDb/data), MIT licence), to recognise known discs. It checks the published SHA-256 and keeps the last good copy, so it also works offline; `DISCERN_DISCDB_URL=off` turns the download off.
+
 Discern also fetches each movie's poster from TMDb's image server, `image.tmdb.org`, at the address Radarr's lookup gives (nothing else is fetched from there). Without internet access the pages simply show no posters.
 
 At the first start Discern downloads `makemkvcon` (about 19 MB) from makemkv.com, checks its SHA-256 against the version pinned in this release, and installs it in `/config/makemkv/<version>`. Later starts reuse it. A new Discern release that pins a newer MakeMKV installs that version and removes the old one.
@@ -29,7 +31,7 @@ The container needs no `--privileged` and no extra capabilities: only the two de
 
 ## Folders
 
-- **`/config`**: the database, the installed MakeMKV and its settings, including the key, and the movie posters (`/config/posters`, about 30 KB each). Back it up; the posters can be left out, they are fetched again.
+- **`/config`**: the database, the installed MakeMKV and its settings, including the key, the movie posters (`/config/posters`, about 30 KB each), TheDiscDB's index (`/config/discdb`) and any stalled rip's diagnostics (`/config/diagnostics`). Back it up; the posters and the index can be left out, they are fetched again.
 - **Staging and the library on one filesystem.** Mount the folder that holds both, and set `DISCERN_STAGING_DIR` inside it. Radarr then imports with a rename instead of copying tens of gigabytes. Set `DISCERN_LIBRARY_DIR` too, and Discern warns at start-up if the two are on different filesystems.
 - **The same paths as Radarr.** If Discern mounts the media folder at the same path as Radarr's container does, Radarr finds staging without extra settings. Otherwise set `DISCERN_RADARR_STAGING_DIR` to staging as Radarr sees it.
 - **The user** (`user:`) should be the owner of the media folders, the same one Radarr uses, so Radarr can move the rips.

@@ -1,0 +1,78 @@
+name: TheDiscDB index
+
+# Every day, build the compact TheDiscDB index Discern downloads (decision
+# D38) and publish it as the files of the "discdb-index" release:
+#
+#   discdb-index.json.gz         the index (format: internal/discdb)
+#   discdb-index.json.gz.sha256  its SHA-256, checked by Discern
+#   discdb-index-LICENSE.txt     TheDiscDB's MIT licence, which the data is under
+#
+# Only the disc records are fetched. TheDiscDB's repository is about 1.6 GB,
+# mostly images and history; a shallow, blob-less, sparse clone downloads just
+# the movie folders' metadata.json and discNN.json files.
+#
+# The release is a pre-release with a fixed tag, so it never becomes the
+# "latest" release, and its tag doesn't match the release workflow's v1.2.3.
+on:
+  schedule:
+    - cron: "41 4 * * *" # every day, 04:41 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+# A manual run during the scheduled one waits for it: two runs replacing the
+# release's files at once could publish one's index with the other's checksum.
+concurrency:
+  group: discdb-index
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and replace its files
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Fetch TheDiscDB's movie records
+        run: |
+          set -eu
+          git clone --quiet --depth 1 --filter=blob:none --no-checkout https://github.com/TheDiscDb/data.git thediscdb
+          cd thediscdb
+          git sparse-checkout set --no-cone '/LICENSE' '/data/movie/*/metadata.json' '/data/movie/*/*/disc*.json'
+          git checkout --quiet
+          echo "SOURCE=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "BUILT=$(git log -1 --format=%cI)" >> "$GITHUB_ENV"
+          du -sh .
+
+      # discern-index reads the index back before writing it, so a bad one is
+      # never published; records that don't parse are listed and skipped. It
+      # is dated by TheDiscDB's commit, so unchanged data gives the same bytes
+      # and Discern doesn't download it again.
+      - name: Build the index
+        run: go run ./cmd/discern-index -data thediscdb -source "$SOURCE" -built "$BUILT" -out discdb-index.json.gz
+
+      - name: Publish it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          cp thediscdb/LICENSE discdb-index-LICENSE.txt
+          if ! gh release view discdb-index --repo "$REPO" >/dev/null 2>&1; then
+            gh release create discdb-index --repo "$REPO" --prerelease \
+              --title "TheDiscDB index (updated daily)" \
+              --notes "The disc data Discern uses to recognise known discs, built every day from [TheDiscDB](https://github.com/TheDiscDb/data) (MIT licence, see discdb-index-LICENSE.txt) by the TheDiscDB index workflow. Discern downloads it by itself."
+          fi
+          # The checksum goes up last: a Discern downloading in between finds
+          # the new index and the old checksum disagree, keeps its last good
+          # index, and tries again later.
+          gh release upload discdb-index --repo "$REPO" --clobber discdb-index.json.gz discdb-index-LICENSE.txt
+          gh release upload discdb-index --repo "$REPO" --clobber discdb-index.json.gz.sha256
+          echo "Published the index of TheDiscDB ${SOURCE}."
