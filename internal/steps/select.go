@@ -1,47 +1,25 @@
 package steps
 
 import (
-	"fmt"
+	"context"
 
-	"github.com/danvanton/discern/internal/format"
 	"github.com/danvanton/discern/internal/jobs"
 	"github.com/danvanton/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/selector"
 )
 
-// Suggest picks the title most likely to be the movie, for the user to
-// confirm. It is v0.1's selector: simple on purpose, and never automatic
-// (Auto is always false). The real selector, with TheDiscDB and decoy
-// checks, comes in v0.2 and is measured by the benchmark (docs/DESIGN.md,
-// sections 7 and 8).
-//
-// The order of preference: the one title MakeMKV marked as the main feature,
-// then the longest title (the larger one if two are equally long).
-func Suggest(d *makemkv.Disc) jobs.Selection {
-	if d == nil || len(d.Titles) == 0 {
-		return jobs.Selection{Reason: "the scan found no titles"}
-	}
-	var marked []makemkv.Title
-	for _, t := range d.Titles {
-		if t.MakeMKVMainFeature {
-			marked = append(marked, t)
+// Select asks the selector (internal/selector) which titles are the movie,
+// with TheDiscDB's index when there is one. It only suggests: the user
+// approves every disc until auto-import (decision D40).
+func (s *Steps) Select(_ context.Context, j *jobs.Job) (jobs.Selection, error) {
+	in := selector.Input{Disc: j.Disc, Movie: j.Movie}
+	if s.Index != nil {
+		if ix := s.Index(); ix != nil {
+			in.Indexed = true
+			in.Match, in.Tied = ix.Lookup(j.Disc, nil)
 		}
 	}
-	if len(marked) == 1 {
-		return jobs.Selection{
-			Titles: []int{marked[0].Index},
-			Reason: fmt.Sprintf("MakeMKV marked title %d (%s) as the main feature", marked[0].Index, format.Clock(marked[0].Duration)),
-		}
-	}
-	best := d.Titles[0]
-	for _, t := range d.Titles[1:] {
-		if t.Duration > best.Duration || (t.Duration == best.Duration && t.SizeBytes > best.SizeBytes) {
-			best = t
-		}
-	}
-	return jobs.Selection{
-		Titles: []int{best.Index},
-		Reason: fmt.Sprintf("title %d is the longest (%s)", best.Index, format.Clock(best.Duration)),
-	}
+	return selector.Decide(in), nil
 }
 
 // SameDisc reports whether two scans are of the same disc: the same label

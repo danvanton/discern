@@ -85,6 +85,12 @@ details.panel[open] > summary { margin-bottom: 0.75rem; }
 
 .note { white-space: pre-wrap; }
 
+/* The selector's decision on the review page (decision D43): what holds it
+   back stands out; the evidence is folded. */
+.decision { margin: 0.5rem 0 0.75rem; }
+.decision .holds { margin: 0.25rem 0; padding-left: 1.25rem; color: var(--ask); }
+.decision .reasons { margin: 0.25rem 0; padding-left: 1.25rem; }
+
 /* Job cards: the poster on the left, the words on the right. The whole card
    is the link, so it is a big target on a phone. */
 .card {

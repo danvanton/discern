@@ -144,7 +144,12 @@ func (e *Engine) step(ctx context.Context, j *Job) error {
 		if err := checkTitles(j.Disc, sel.Titles); err != nil {
 			return e.fail(ctx, j, "select", err)
 		}
-		j.Titles, j.Note = sel.Titles, sel.Reason
+		j.Titles, j.Note, j.Selection = sel.Titles, sel.Reason, &sel
+		// TheDiscDB's movie fills in one the disc's name didn't find; when
+		// both are known and differ, the selector holds (decision D47).
+		if j.Movie == nil && sel.Movie != nil {
+			j.Movie = sel.Movie
+		}
 		if sel.Auto && len(sel.Titles) > 0 {
 			return e.move(ctx, j, Ripping, sel.Reason)
 		}
@@ -249,7 +254,7 @@ func (e *Engine) Approve(ctx context.Context, id int64, titles []int, movie *Mov
 		return fmt.Errorf("job %d is %s, not waiting for approval", id, j.State)
 	}
 	if len(titles) == 0 {
-		return errors.New("choose at least one title")
+		return ErrNoTitles
 	}
 	if err := checkTitles(j.Disc, titles); err != nil {
 		return err

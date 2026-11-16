@@ -510,6 +510,61 @@ func TestJobPageForApproval(t *testing.T) {
 	}
 }
 
+// The selector's decision is shown: how sure it is, what holds it, its
+// reasons, TheDiscDB's names for titles, and TheDiscDB's movie when it
+// isn't the job's (decisions D43, D47, D49). Two cuts start unticked.
+func TestJobPageShowsTheDecision(t *testing.T) {
+	b := newBackend()
+	j := b.jobs[1]
+	j.Titles = nil
+	j.Selection = &jobs.Selection{Titles: []int{}, Choices: []int{0, 1}, Confidence: jobs.Low,
+		Reason: "two cuts", Holds: []string{"TheDiscDB lists 2 main titles: choose the one to keep"},
+		Reasons: []string{"TheDiscDB knows this disc: Alien (1979)"},
+		Labels:  map[int]jobs.TitleLabel{0: {Type: "MainMovie", Name: "Alien <Director's Cut>"}, 1: {Type: "DeletedScene"}},
+		Movie:   &jobs.Movie{TMDbID: 348, Title: "Alien", Year: 1979}}
+	srv := newServer(t, b)
+	_, body := get(t, srv, "/jobs/1")
+	for _, want := range []string{
+		`<span class="badge ask">Check</span>`,
+		"<li>TheDiscDB lists 2 main titles: choose the one to keep.</li>",
+		"How Discern chose", "<li>TheDiscDB knows this disc: Alien (1979).</li>",
+		`>Main movie</span> Alien &lt;Director&#39;s Cut&gt;</span>`, // escaped: names come from TheDiscDB
+		">Deleted scene</span>",
+		`<input type="checkbox" name="title" value="0">`, `<input type="checkbox" name="title" value="1">`,
+		`TheDiscDB says this disc is <strong>Alien (1979)</strong>. <a href="/jobs/1?tmdb=348">Use it</a>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("job page is missing %q", want)
+		}
+	}
+	if strings.Contains(body, "Suggested because") || strings.Contains(body, `name="title" value="0" checked`) {
+		t.Error("the old note, or a pre-ticked cut")
+	}
+	b.failNext = jobs.ErrNoTitles
+	if _, body := do(t, srv, "POST", "/jobs/1/approve", url.Values{}, true, nil); !strings.Contains(body, "Choose a cut: tick one of the main titles TheDiscDB names.") {
+		t.Error("approving no cut didn't say to choose one")
+	}
+
+	// TheDiscDB agreeing with the job's movie is said, without the offer.
+	j.Selection.Movie = &jobs.Movie{TMDbID: 603, Title: "The Matrix", Year: 1999}
+	if _, body := get(t, srv, "/jobs/1"); !strings.Contains(body, "TheDiscDB knows this disc as this movie.") || strings.Contains(body, "Use it") {
+		t.Error("TheDiscDB's agreement isn't shown, or the offer still is")
+	}
+}
+
+func TestSentenceAndClassName(t *testing.T) {
+	for in, want := range map[string]string{"title 3 is it": "Title 3 is it.", "Done.": "Done.", "": "", "é": "É."} {
+		if got := sentence(in); got != want {
+			t.Errorf("sentence(%q) = %q; want %q", in, got, want)
+		}
+	}
+	for in, want := range map[string]string{"MainMovie": "Main movie", "DeletedScene": "Deleted scene", "Extra": "Extra", "": ""} {
+		if got := className(in); got != want {
+			t.Errorf("className(%q) = %q; want %q", in, got, want)
+		}
+	}
+}
+
 func TestApprove(t *testing.T) {
 	b := newBackend()
 	srv := newServer(t, b)

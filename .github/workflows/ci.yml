@@ -46,6 +46,66 @@ jobs:
       - name: Build
         run: go build -o bin/discern ./cmd/discern
 
+  # The selector's benchmark (DESIGN section 8, decisions D50 and D51): the
+  # commit and the one before it are scored on the same, freshly published
+  # TheDiscDB index, so new data can't fail a commit that changed nothing.
+  # It fails if the commit picks more wrong titles than the one before, or
+  # if wrong is over 0.5% of the discs it would act on alone.
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the commit before, to score it too
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # The checksum is uploaded after the index, so a download between the
+      # two can mismatch: try again a little later. The index is always
+      # Discern's own release, so a fork's CI uses it too.
+      - name: Download TheDiscDB's index
+        env:
+          URL: https://github.com/danvanton/discern/releases/download/discdb-index/discdb-index.json.gz
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/index" && cd "$RUNNER_TEMP/index"
+          for attempt in 1 2 3; do
+            curl -fsSL --retry 3 -o discdb-index.json.gz "$URL"
+            curl -fsSL --retry 3 -o discdb-index.json.gz.sha256 "$URL.sha256"
+            if sha256sum -c discdb-index.json.gz.sha256; then exit 0; fi
+            sleep 30
+          done
+          echo "The index doesn't match its checksum"; exit 1
+
+      # On a push the base is the commit before it; on a pull request, the
+      # branch it goes into. The base is scored first, then this commit once:
+      # its scores, its wrong picks and the gate. Without a base (a new
+      # branch, a tag) or before the benchmark existed, the commit is checked
+      # against the 0.5% target only.
+      - name: Score this commit against the one before
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          INDEX="$RUNNER_TEMP/index/discdb-index.json.gz"
+          BASE=""
+          if [ "$EVENT" = pull_request ]; then BASE="$PR_BASE"; elif [ "$EVENT" = push ]; then BASE="$BEFORE"; fi
+          GATE=(-gate)
+          if [ -n "$BASE" ] && git cat-file -e "$BASE:cmd/discern-bench/main.go" 2>/dev/null; then
+            git worktree add --detach "$RUNNER_TEMP/base" "$BASE"
+            (cd "$RUNNER_TEMP/base" && go run ./cmd/discern-bench -index "$INDEX" -json "$RUNNER_TEMP/base.json" >/dev/null)
+            GATE=(-compare "$RUNNER_TEMP/base.json")
+            echo "Compared with $BASE." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No benchmark before this commit: checked against the 0.5% target only." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          go run ./cmd/discern-bench -index "$INDEX" -list "${GATE[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+
   # The image builds for one platform here, to catch a broken Dockerfile
   # before a release tries both.
   image:

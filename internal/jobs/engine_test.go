@@ -28,6 +28,8 @@ type fakeSteps struct {
 	calls []string
 
 	auto        bool                // Select returns Auto
+	noMovie     bool                // Identify finds no movie
+	selMovie    *jobs.Movie         // the movie Select's TheDiscDB match names
 	discChanged bool                // CheckDisc reports a different disc
 	checks      int                 // how often CheckDisc ran
 	failIn      string              // the step that returns an error
@@ -73,10 +75,14 @@ func (f *fakeSteps) Scan(context.Context, *jobs.Job) (*makemkv.Disc, error) {
 	return sampleDisc, f.record("scan")
 }
 func (f *fakeSteps) Identify(context.Context, *jobs.Job) (*jobs.Movie, error) {
+	if f.noMovie {
+		return nil, f.record("identify")
+	}
 	return &jobs.Movie{TMDbID: 1, Title: "Sample", Year: 2020}, f.record("identify")
 }
 func (f *fakeSteps) Select(context.Context, *jobs.Job) (jobs.Selection, error) {
-	return jobs.Selection{Titles: []int{0}, Auto: f.auto, Reason: "longest title"}, f.record("select")
+	return jobs.Selection{Titles: []int{0}, Auto: f.auto, Reason: "longest title", Confidence: jobs.Medium,
+		Reasons: []string{"longest title"}, Movie: f.selMovie}, f.record("select")
 }
 func (f *fakeSteps) Rip(ctx context.Context, j *jobs.Job, dir string, progress func(float64)) error {
 	if f.ripSawDir != nil {
@@ -208,6 +214,30 @@ func TestJobWaitsForApprovalThenFinishes(t *testing.T) {
 	got, _ := e.store.Job(ctx, j.ID)
 	if got.State != jobs.Done || !slices.Equal(got.Titles, []int{1}) {
 		t.Errorf("state %s, titles %v; want done with [1]", got.State, got.Titles)
+	}
+}
+
+// The selector's decision is saved with the job, and TheDiscDB's movie
+// fills in one the disc's name didn't find, but never replaces one it did
+// (decision D47).
+func TestSelectSavesTheDecisionAndFillsTheMovie(t *testing.T) {
+	discdb := &jobs.Movie{TMDbID: 348, Title: "Alien", Year: 1979}
+	for _, c := range []struct {
+		noMovie bool
+		want    int
+	}{{true, 348}, {false, 1}} {
+		e := newEnv(t, &fakeSteps{noMovie: c.noMovie, selMovie: discdb})
+		j, _ := e.store.CreateJob(ctx, "/dev/sr0")
+		if err := e.engine.Run(ctx, j.ID); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := e.store.Job(ctx, j.ID)
+		if got.Movie == nil || got.Movie.TMDbID != c.want {
+			t.Errorf("Identify found none: %v; movie %+v, want TMDb %d", c.noMovie, got.Movie, c.want)
+		}
+		if got.Selection == nil || got.Selection.Confidence != jobs.Medium || got.Note != "longest title" {
+			t.Errorf("selection %+v, note %q", got.Selection, got.Note)
+		}
 	}
 }
 

@@ -41,6 +41,8 @@ var (
 	// ErrNoMovie means a job was approved before its movie is known. The
 	// import needs one; whoever shows the error says how to choose it.
 	ErrNoMovie = errors.New("the job has no movie yet: the import needs to know which one it is")
+	// ErrNoTitles means a job was approved with no title ticked.
+	ErrNoTitles = errors.New("choose at least one title")
 	// ErrDiscChanged is returned by Steps.CheckDisc when the drive holds a
 	// different disc from the one the job scanned.
 	ErrDiscChanged = errors.New("the disc in the drive is not the one this job scanned")

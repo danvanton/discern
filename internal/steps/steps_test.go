@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/danvanton/discern/internal/discdb"
 	"github.com/danvanton/discern/internal/jobs"
 	"github.com/danvanton/discern/internal/makemkv"
 	"github.com/danvanton/discern/internal/makemkv/fake"
@@ -28,43 +30,35 @@ var ctx = context.Background()
 
 func titles(ts ...makemkv.Title) *makemkv.Disc { return &makemkv.Disc{Volume: "X", Titles: ts} }
 
-func TestSuggest(t *testing.T) {
-	h := time.Hour
-	cases := []struct {
-		name string
-		disc *makemkv.Disc
-		want []int
-		why  string
-	}{
-		{"longest wins", titles(
-			makemkv.Title{Index: 0, Duration: 20 * time.Minute},
-			makemkv.Title{Index: 1, Duration: 2 * h},
-			makemkv.Title{Index: 2, Duration: 40 * time.Minute}), []int{1}, "longest"},
-		{"equal length: larger wins", titles(
-			makemkv.Title{Index: 0, Duration: 2 * h, SizeBytes: 10},
-			makemkv.Title{Index: 1, Duration: 2 * h, SizeBytes: 20}), []int{1}, "longest"},
-		{"MakeMKV's mark beats length", titles(
-			makemkv.Title{Index: 0, Duration: 3 * h},
-			makemkv.Title{Index: 5, Duration: 2 * h, MakeMKVMainFeature: true}), []int{5}, "MakeMKV marked"},
-		{"two marks: fall back to length", titles(
-			makemkv.Title{Index: 0, Duration: 3 * h, MakeMKVMainFeature: true},
-			makemkv.Title{Index: 1, Duration: 2 * h, MakeMKVMainFeature: true}), []int{0}, "longest"},
-		{"no titles", titles(), nil, "no titles"},
-		{"no scan", nil, nil, "no titles"},
+// Select hands the selector TheDiscDB's index when there is one; without
+// one it decides from the scan alone, and never automatically.
+func TestSelectUsesTheIndexInUse(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "testdata", "makemkv", "scan-star-trek-iii-uhd.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			sel := Suggest(c.disc)
-			if sel.Auto {
-				t.Error("v0.1 must never select automatically")
-			}
-			if len(sel.Titles) != len(c.want) || (len(c.want) == 1 && sel.Titles[0] != c.want[0]) {
-				t.Errorf("titles = %v, want %v", sel.Titles, c.want)
-			}
-			if !strings.Contains(sel.Reason, c.why) {
-				t.Errorf("reason = %q, want it to mention %q", sel.Reason, c.why)
-			}
-		})
+	var d makemkv.Disc
+	if err := json.Unmarshal(b, &d); err != nil {
+		t.Fatal(err)
+	}
+	ix, _, err := discdb.Build(filepath.Join("..", "..", "testdata", "discdb"), "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var index *discdb.Index // none yet
+	s := &Steps{Index: func() *discdb.Index { return index }}
+	j := &jobs.Job{Disc: &d}
+
+	sel, err := s.Select(ctx, j)
+	if err != nil || sel.Confidence == jobs.High || slices.ContainsFunc(sel.Reasons, func(r string) bool {
+		return strings.Contains(r, "TheDiscDB")
+	}) {
+		t.Errorf("without an index: %+v, %v", sel, err)
+	}
+	index = ix
+	sel, err = s.Select(ctx, j)
+	if err != nil || sel.Confidence != jobs.High || !slices.Equal(sel.Titles, []int{29}) || sel.Auto {
+		t.Errorf("with the index: %s %v auto %v, %v", sel.Confidence, sel.Titles, sel.Auto, err)
 	}
 }
 

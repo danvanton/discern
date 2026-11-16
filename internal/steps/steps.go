@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/danvanton/discern/internal/discdb"
 	"github.com/danvanton/discern/internal/importer"
 	"github.com/danvanton/discern/internal/jobs"
 	"github.com/danvanton/discern/internal/makemkv"
@@ -54,6 +55,9 @@ type Steps struct {
 	Trimmed func(ctx context.Context, j *jobs.Job) (bool, error)
 	// Tracks, if set, reads a ripped file's tracks for Verify (Mkvmerge).
 	Tracks func(ctx context.Context, file string) (FileTracks, error)
+	// Index, if set, returns TheDiscDB's index in use, or nil when there is
+	// none yet (App.DiscIndex). Select matches the disc against it.
+	Index func() *discdb.Index
 
 	info func(ctx context.Context, drive string) (*makemkv.Disc, error) // runner.Info; tests replace it
 
@@ -146,10 +150,6 @@ func (s *Steps) trayGeneration(drive string) (uint64, bool) {
 
 func (s *Steps) Identify(ctx context.Context, j *jobs.Job) (*jobs.Movie, error) {
 	return s.radarr.Identify(ctx, j)
-}
-
-func (s *Steps) Select(_ context.Context, j *jobs.Job) (jobs.Selection, error) {
-	return Suggest(j.Disc), nil
 }
 
 // Rip saves each chosen title. makemkvcon needs an empty folder per rip (the

@@ -20,7 +20,7 @@ import (
 // check that.
 var _ jobs.Store = (*Store)(nil)
 
-const jobColumns = `id, drive, state, disc, movie, titles, languages, failure, note, failed_in, progress, created_at, updated_at`
+const jobColumns = `id, drive, state, disc, movie, titles, selection, languages, failure, note, failed_in, progress, created_at, updated_at`
 
 func (s *Store) CreateJob(ctx context.Context, drive string) (*jobs.Job, error) {
 	now := s.now()
@@ -133,6 +133,10 @@ func (s *Store) Move(ctx context.Context, j *jobs.Job, to jobs.State, note strin
 	if err != nil {
 		return err
 	}
+	selection, err := jsonOrNull(j.Selection)
+	if err != nil {
+		return err
+	}
 	langs, err := jsonOrNull(j.Languages)
 	if err != nil {
 		return err
@@ -153,10 +157,10 @@ func (s *Store) Move(ctx context.Context, j *jobs.Job, to jobs.State, note strin
 	// Progress is deliberately not written here: only SetProgress writes it,
 	// so a Move from an older copy of the job can't undo a newer value.
 	res, err := tx.ExecContext(ctx, `UPDATE jobs
-		SET state = ?, disc = ?, movie = ?, titles = ?, languages = ?, failure = ?, note = ?, failed_in = ?,
+		SET state = ?, disc = ?, movie = ?, titles = ?, selection = ?, languages = ?, failure = ?, note = ?, failed_in = ?,
 		    updated_at = ?
 		WHERE id = ? AND state = ?`,
-		to, disc, movie, string(titles), langs, failure, j.Note, j.FailedIn, ms(now),
+		to, disc, movie, string(titles), selection, langs, failure, j.Note, j.FailedIn, ms(now),
 		j.ID, j.State)
 	if isUniqueViolation(err) {
 		return fmt.Errorf("%w: %s", jobs.ErrDriveBusy, j.Drive)
@@ -231,10 +235,10 @@ func addEvent(ctx context.Context, tx *sql.Tx, id int64, at time.Time, from, to 
 // have this Scan method.
 func scanJob(row interface{ Scan(...any) error }) (*jobs.Job, error) {
 	var j jobs.Job
-	var disc, movie, langs, failure sql.NullString
+	var disc, movie, selection, langs, failure sql.NullString
 	var titles string
 	var created, updated int64
-	if err := row.Scan(&j.ID, &j.Drive, &j.State, &disc, &movie, &titles, &langs, &failure,
+	if err := row.Scan(&j.ID, &j.Drive, &j.State, &disc, &movie, &titles, &selection, &langs, &failure,
 		&j.Note, &j.FailedIn, &j.Progress, &created, &updated); err != nil {
 		return nil, err
 	}
@@ -255,6 +259,12 @@ func scanJob(row interface{ Scan(...any) error }) (*jobs.Job, error) {
 	}
 	if err := json.Unmarshal([]byte(titles), &j.Titles); err != nil {
 		return nil, fmt.Errorf("job %d titles: %w", j.ID, err)
+	}
+	if selection.Valid {
+		j.Selection = new(jobs.Selection)
+		if err := json.Unmarshal([]byte(selection.String), j.Selection); err != nil {
+			return nil, fmt.Errorf("job %d selection: %w", j.ID, err)
+		}
 	}
 	if langs.Valid {
 		j.Languages = new(lang.Choice)

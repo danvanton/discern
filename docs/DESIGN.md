@@ -57,7 +57,7 @@ Short versions of the concepts the rest of the document relies on.
 
 **How a Blu-ray is laid out.** The video sits in **clips** (`BDMV/STREAM/00012.m2ts`). A **playlist** (`BDMV/PLAYLIST/00800.mpls`) says which clips to play in which order. The movie is a playlist. So is each extra, the play-all, and each trailer. MakeMKV calls each playlist a **title**, and the list of clips it uses is its **segment map** (for example `"3,13,15,1"`).
 
-**Fake playlists (obfuscation).** Some studios put hundreds of playlists on a disc. Each one is about the movie's length and uses the same clips in a shuffled order. Only one plays the film correctly; the disc's Java menu (BD-J) knows which. A ripper that picks "the longest title" gets a jumbled film. In TheDiscDB's data the longest title is not the main movie on **192 of 2,627** movie discs (**7.3%**), and the worst have 400–528 titles (*Despicable Me*, *La La Land*, *Toy Story 4*, *Coco*).
+**Fake playlists (obfuscation).** Some studios put hundreds of playlists on a disc. Each one is about the movie's length and uses the same clips in a shuffled order. Only one plays the film correctly; the disc's Java menu (BD-J) knows which. A ripper that picks "the longest title" gets a jumbled film. In TheDiscDB's data (November 2026) the longest title is not the main movie on **233 of 2,819** movie discs with one main movie (**8.3%**). On 104 of them it is the same video through another playlist, which rips the same film, so on **129 (4.6%)** "the longest title" gives a wrong file: a decoy, a long making-of, or a variant playlist. (The benchmark, section 8, scores 2,818 of these discs and finds 128: it leaves out one whose answer in TheDiscDB looks wrong.) The worst discs have 400–528 titles (*Despicable Me*, *La La Land*, *Toy Story 4*, *Coco*).
 
 **makemkvcon and robot mode.** `makemkvcon` is MakeMKV's command-line engine (closed source). With `-r` it prints one machine-readable line per fact:
 
@@ -122,7 +122,7 @@ flowchart TB
 
 **Why these boundaries.**
 
-- **`selector` has no I/O.** Everything it needs (the scan, the TheDiscDB candidates, the library state) is passed in as plain data, and it returns a decision with reasons. That makes the most important logic the easiest to test and to benchmark: run it on 2,627 discs in seconds, no drive needed.
+- **`selector` has no I/O.** Everything it needs (the scan, the TheDiscDB candidates, the library state) is passed in as plain data, and it returns a decision with reasons. That makes the most important logic the easiest to test and to benchmark: run it on about 3,000 discs in under 3 seconds, no drive needed.
 - **`makemkv` is the only package that knows MakeMKV exists.** Everything else sees `Disc` and `Title` structs. If MakeMKV changes its output, one package changes. Tests replace it with a fake that replays recorded output (section 13).
 - **`importer` is an interface.** Radarr, Sonarr and Library each implement `Plan(job) → ImportPlan` and `Apply(plan) → Result`. The job logic does not know which one it is talking to, so offering "with or without Radarr" is one setting, not two code paths. Adding another target later does not touch the job logic.
 - **One worker per drive.** Each drive gets its own goroutine, so two drives rip at once. They share one MakeMKV install and one database.
@@ -164,7 +164,7 @@ flowchart LR
   - it ejects the disc when a job is done;
   - it reports health: the database, makemkvcon and Radarr.
 - **`internal/steps`** is the real `jobs.Steps`:
-  - **Select** suggests MakeMKV's main-feature title, otherwise the longest. It is never automatic in v0.1.
+  - **Select** asks `internal/selector` (section 7) with TheDiscDB's index in use, if there is one. The engine saves its decision with the job, and takes TheDiscDB's movie when the disc's name found none (decision D47). It never rips on its own yet (decision D40).
   - **CheckDisc** first asks the drive watcher whether the tray has changed since the job's scan; the watcher counts every change. If not, the disc can't have been swapped, and nothing is read. Otherwise (a tray change, a restart, or a system where drives can't be watched) it rescans and compares the result with the job's scan. A label alone can't tell discs apart, because generic labels are common.
   - **Rip** rips each chosen title into its own subfolder (the watchdog needs an empty one) and moves the file up into the job's folder.
   - **Verify** checks that there is one file per title, and that each is 70–110% of the size the scan gave it. A rip that stopped early fails here: the Kill Bill stall was under 1%. The bounds are wide until real rips have been measured. With languages chosen (decision D24) the file is smaller by the tracks left out, which the scan's size still counts, so the floor is 30% then. Verify also reads each file's tracks with `mkvmerge -J` (in the image; headers only): it must be a Matroska file with video, and with audio if the title has any on the disc. That is what stops a rip without sound from being imported. It also fails a rip that kept a language's audio but lost that language's lossless track (TrueHD, DTS-HD Master Audio, PCM or FLAC) when the scan's title has one: v0.1.3 kept only Star Trek III's AC-3 copy of its TrueHD 7.1, and Verify passed it. A language with no audio in the file was left out on purpose and isn't checked. Where mkvmerge is missing (a development PC) Discern says so at start and checks size only.
@@ -308,43 +308,63 @@ Some releases split one movie over two discs (for example a UHD "Whole Bloody Af
 
 ## 7. Title selection
 
-This is the part that makes Discern worth using. The selector collects **evidence**, each piece with a weight. Then it either agrees on a choice or abstains.
+This is the part that makes Discern worth using. The selector (`internal/selector`, decision D43) collects **evidence**, strongest first, and either agrees on a choice or holds for the user. It is one pure function, `selector.Decide`, so the app and the benchmark (section 8) run the same code.
 
 **Evidence, strongest first:**
 
-| Evidence | Why it is strong or weak |
-|---|---|
-| TheDiscDB names a title `MainMovie` on a disc that matches ours by shape | Someone ripped this exact pressing and checked it. Matching by playlist file and segment map survives MakeMKV numbering titles differently, a real problem seen in practice. |
-| MakeMKV marks a title as the main feature (`SEG_MainFeature`) | It ran the disc's own menu logic. Usually right on fake-playlist discs, but it can fail or be missing. |
-| Only one title is feature-length | On a normal disc this is the movie. |
-| Longest title, then most chapters | The fallback. Right 92.7% of the time, which is not enough to act on alone. |
+| Evidence | Why it is strong or weak | What it gives |
+|---|---|---|
+| TheDiscDB names one title `MainMovie` on a disc that matches ours by shape | Someone ripped this exact pressing and checked it. Matching by playlist file and segment map survives MakeMKV numbering titles differently, a real problem seen in practice. | **High** |
+| After the decoy checks, only one title is feature-length (45 minutes or more) | On a normal disc this is the movie. On TheDiscDB's discs it is wrong on none of the 2,512 it would act on (section 8), with the check for a shorter, richer title (decision D52). | **Medium** |
+| MakeMKV marks a title as the main feature (`SEG_MainFeature`) | It ran the disc's own menu logic. Usually right on fake-playlist discs, but it can fail or be missing, and TheDiscDB's records don't keep it, so the benchmark can't measure it. | It chooses the pre-ticked guess among several long titles, and **holds** when it marks another video, whether or not it marks the pick too. It never decides alone. |
+| Longest title, then most chapters, then the largest | The fallback, wrong on 4.6% of discs. | A pre-ticked guess, always with a hold (**Low**) |
 
-**Checks that remove decoys:**
+**Confidence and holds** (decision D44). **High** and **Medium** are as above. Any hold makes it **Low**: the selector still pre-ticks its best guess, but says why it wouldn't act alone. The holds today:
 
-- **Too little data.** A long playlist under ~3 Mbit/s loops tiny clips. It is never the film.
-- **Lookalikes.** Several titles within a few minutes of each other that use the same clips in a different order mean a fake-playlist disc. The longest-title rule is then switched off.
-- **Duplicates.** Same duration (±0.5 s) and size (±0.1 %) means the same video through another playlist. Keep one.
-- **Play-all.** A title whose segment map is the others joined together. Not an episode, not the movie.
+- TheDiscDB lists two or more `MainMovie` titles (decision D41): nothing is pre-ticked; the titles are listed first with TheDiscDB's names, and approving without one asks for a cut (decision D49).
+- TheDiscDB's movie isn't the one the disc's name found (decision D47).
+- A feature-length title isn't in TheDiscDB's record of the disc (could be another cut).
+- After the decoy checks, two or more feature-length titles remain ("perhaps another cut, or a decoy"); three or more within 2% of each other's length are named as decoy playlists.
+- No feature-length title, or none that passes the checks.
+- MakeMKV marked another video as the main feature, instead of the pick or as well as it.
+- Discs of two or more movies in TheDiscDB fit the scan, so the match fails closed (`discdb.Index.Lookup` names them): a double feature filed under each of its films. The page names the movies instead of saying TheDiscDB doesn't know the disc.
+- A shorter title of 20 minutes or more carries over 1.25 times the pick's data per second (decision D52): the film may be under 45 minutes. *Frosty the Snowman* is a 25-minute TV special on a disc whose only title over 45 minutes is a 47-minute documentary at two thirds of its bitrate.
+- TheDiscDB's record looks wrong (decision D53): its one main title is under 45 minutes, while a title it leaves unclassified is feature-length and more than twice as long. Its classes aren't trusted then, and the scan decides. TheDiscDB's 4K record of *The Woman King* names a 9:48 extra as the movie; it is the only record in the catalogue this flags, and without the check Discern pre-ticked the extra at High.
+
+When TheDiscDB knows the disc but names no main title (decision D48; about 245 discs), its movie is still used, the titles it classifies as anything else (`Extra`, `Trailer`...) are ruled out, and the scan decides, at most Medium. They stay ruled out in the last fallback too, when no title is feature-length.
+
+**Checks that remove decoys** (decision D45), measured on TheDiscDB's discs:
+
+- **Duplicates.** The same length (±0.5 s) and size (±0.1%) is the same video through another playlist: counted once, keeping the one MakeMKV marked.
+- **Too little data.** A feature-length title under 3 Mbit/s, or under half the bitrate of the disc's richest feature-length title, is an extra or a loop. A fixed floor alone catches 1 of the 129 discs where the longest title is wrong; the relative test is what works, because long making-ofs run at 5–17 Mbit/s against the film's 20–100. The leanest real main movie in TheDiscDB is 3.6 Mbit/s.
+- **Lookalikes.** Three or more feature-length titles within 2% of each other's length mean a fake-playlist disc. DESIGN first said "the same clips in a different order", but fake playlists use different clip numbers, and that test found none.
+- **No play-all check.** "A title whose segment map is the others joined together" was planned, but on 60 movie discs the film itself is such a title (an intro or a studio logo per language, then the film), and the check took wrong picks from 2 to 62. It comes back for TV (v0.3), where a play-all of episodes is the decoy.
 
 **Where TheDiscDB's data comes from** (decision D38). A workflow in Discern's repository (`.github/workflows/discdb-index.yml`, with a shallow, blob-less, sparse clone of just the disc records) pulls TheDiscDB's data every day, keeps only the fields the selector needs (no images, no track lists), and publishes the result as a compressed index of a few MB with its SHA-256, crediting TheDiscDB under its MIT licence. It is the files of the pre-release `discdb-index`: `discdb-index.json.gz`, its `.sha256` (uploaded last) and TheDiscDB's licence. Discern (`discdb.Catalog`) loads its saved copy from `/config/discdb/` at start, then checks the published checksum at start and once a day, downloading the index only when it changed. It checks the checksum and the contents, and keeps the last good copy: offline, it uses what it has, a bad download is never used, an index of older data than the one in use is refused, and a failed refresh is tried again an hour later (logged as a warning once, then quietly while it keeps failing the same way). The index is dated by TheDiscDB's commit, not by when it was built, so unchanged data gives the same bytes and isn't downloaded again; runs of the workflow queue rather than overlap. The checksum proves the download is whole, not where it came from; the index is signed before auto-import comes (decision D42). `DISCERN_DISCDB_URL` points elsewhere, or `off` turns it off. Discern works without the index: it isn't a readiness check, and the dashboard's System list says whether it is there.
 
-**Matching a disc** (decision D39) is by shape, from the scan alone: a known disc matches when nearly all its titles line up with the scan's by playlist file, segment map, length and size, and nearly all the scan's long titles line up with it. Playlist files and segment maps survive MakeMKV numbering titles differently. ContentHash may confirm a match later (open question 1).
+**Matching a disc** (decision D39) is by shape, from the scan alone: a known disc matches when nearly all its titles line up with the scan's by playlist file, segment map, length and size, and nearly all the scan's long titles line up with it. Nearly all the running time of the scan's titles of 20 minutes or more must line up too (decision D46): large 4K discs share hundreds of identical studio clips, and on counts alone a disc TheDiscDB didn't know matched another movie's (*1917* matched *Jaws*) with the films themselves unmatched. Playlist files and segment maps survive MakeMKV numbering titles differently. ContentHash may confirm a match later (open question 1).
 
 **Two cuts** (decision D41). When the matched disc lists two `MainMovie` titles, the selector holds for the user with both named from TheDiscDB ("Theatrical Release", "Director's Cut"). It never picks a cut on its own; the cut picker builds on this.
 
-**Output:**
+**Output.** The decision is a `jobs.Selection`, saved with the job as JSON (migration 005), so the review page shows what made the choice even after the index changes:
 
 ```go
-type Decision struct {
-    Titles     []int        // which titles to rip
-    Kind       Kind         // Movie, Episodes, Unknown
-    Confidence Confidence   // High, Medium, Low
-    Reasons    []string     // human-readable, shown in the UI
-    Holds      []string     // why it will not act alone, empty if it may
+type Selection struct {
+    Titles     []int              // pre-ticked; none when the user must choose
+    Choices    []int              // cuts to choose between, none pre-ticked (D49)
+    Confidence Confidence         // High, Medium, Low
+    Reason     string             // one sentence: the first hold, or the decisive reason
+    Reasons    []string           // the evidence, shown folded on the review page
+    Holds      []string           // why it won't act alone; empty if it would
+    Labels     map[int]TitleLabel // TheDiscDB's class and name for each title
+    Movie      *Movie             // the movie TheDiscDB names, if it knows the disc
+    Auto       bool               // always false until auto-import (D40)
 }
 ```
 
-**Auto-import rules (holds).** The job continues on its own only when **all** of these are true. This is the confidence gate:
+The review page shows a badge (Known disc, Likely, Check), the holds, the reasons under "How Discern chose", TheDiscDB's name next to each title it knows, and "TheDiscDB says this disc is X. Use it" when its movie isn't the job's.
+
+**Auto-import rules (holds).** Auto-import comes later (decision D40). When it does, the job continues on its own only when **all** of these are true. This is the confidence gate; the first three are holds already:
 
 - A TheDiscDB shape match exists, and the movie it names agrees with the disc label and with Radarr's first lookup result.
 - Exactly one candidate main feature remains after the decoy checks.
@@ -358,21 +378,35 @@ Anything that fails a rule goes to **Needs you** with the reason, and the UI pre
 
 ## 8. Measuring it: the benchmark
 
-`cmd/discern-bench` runs the selector over TheDiscDB's movie discs and scores it. Each disc's record has the full title list as MakeMKV showed it, plus the answer (which title is `MainMovie`). That makes it a ready-made test set of about 2,600 discs with one main movie each.
+`cmd/discern-bench` runs the selector over TheDiscDB's movie discs and scores it. Each disc's record has the full title list as MakeMKV showed it, plus the answer (which title is `MainMovie`). That makes it a ready-made test set: 2,819 discs with one main movie, and 279 with two or more.
 
-**The trap: testing on the answer key.** The selector *uses* TheDiscDB, so a naive benchmark would look up each disc and find its own answer: 100%, and meaningless. The benchmark therefore runs **leave-one-out**: for each disc, it hides that disc's whole release from the index before asking the selector. That measures what happens with a disc TheDiscDB does not know, which is the case that matters. A second run with the index intact measures the "known disc" path.
+**The trap: testing on the answer key.** The selector *uses* TheDiscDB, so a naive benchmark would look up each disc and find its own answer: 100%, and meaningless. The benchmark therefore runs **leave-one-out**: for each disc, it hides that disc's whole release from the index, and every disc with the same `ContentHash` (a double feature is filed under each of its movies, so hiding one movie's release still left the same disc under the other), before asking the selector. That measures what happens with a disc TheDiscDB does not know, which is the case that matters. A second run with the index intact measures the "known disc" path.
 
-**Scores:**
+**The data** (decision D50) is the published index (section 7), the same file the app uses. Each record becomes the scan MakeMKV would give. The records keep no chapters and no `SEG_MainFeature` mark, so the benchmark measures neither; the cross-check with the movie the disc's name finds isn't simulated either.
+
+**Scores** (decision D50):
 
 | Outcome | Meaning | Cost |
 |---|---|---|
-| Correct | picked the `MainMovie` | none |
-| Abstained | said "needs you" | one question for the user |
-| Wrong | picked another title, confidently | a bad file in the library: the outcome to minimise |
+| Correct | picked the `MainMovie`, or the same video through another playlist (±0.5 s, ±0.1%) | none |
+| Abstained | confidence Low: "needs you" | one question for the user |
+| Wrong | picked another title, at High or Medium | a bad file in the library: the outcome to minimise |
 
-The target is about precision, not coverage: **under 0.5% wrong among the discs it acts on alone**, with as few abstentions as that allows. The baseline to beat is "longest title": 92.7% correct, 7.3% wrong, 0% abstained.
+Discs with one main movie are the gate. Discs with two or more are reported apart: asking is right there (D41), and picking one of the cuts alone is counted, not called wrong. Discs that name no main movie can't be scored, and neither can a disc whose answer looks wrong by the selector's own rule for a doubtful record (`selector.DoubtfulMain`, decision D53): it is listed as "not scored" instead. The rule decides, never a hand-kept list.
 
-The benchmark runs in CI, and a pull request that makes "wrong" go up fails. That is a **regression gate**: the number in the README stays true.
+The target is about precision, not coverage: **under 0.5% wrong among the discs it acts on alone**, with as few abstentions as that allows.
+
+**Results** (index of 2026-11-15, TheDiscDB commit `d27d3c9`):
+
+| Discs with one main movie | Right | Asked | Wrong | Wrong when acting alone |
+|---|---|---|---|---|
+| Unseen by TheDiscDB (leave-one-out) | 2,512 (89.1%) | 306 (10.9%) | 0 | **0%** |
+| Known to TheDiscDB | 2,804 (99.5%) | 14 (0.5%) | 0 | 0% |
+| Baseline: longest title | 2,690 (95.5%) | 0 | 128 (4.5%) | 4.5% |
+
+2,818 discs are scored; *The Woman King*'s 4K disc is not, because its answer looks wrong (D53). Of the 14 known discs asked, 6 are double features filed under both films, whose match ties. Before D52 and D53 there were two wrong picks: *Frosty the Snowman*, whose film is shorter than 45 minutes (now a hold, D52), and *The Woman King*, where the selector picked the film and TheDiscDB's answer was a 9:48 extra. That one was the answer's mistake, not the selector's; the dangerous part was the known-disc path, which pre-ticked the extra at High, and the benchmark couldn't see it, because it scored against the same wrong answer. Of the discs with two main titles, 219 are asked and 60 have one cut picked alone when unseen; 278 are asked when known.
+
+**The CI gate** (decision D51). The `bench` job in `ci.yml` downloads the published index from Discern's own release (so a fork's CI uses it too) and checks its `.sha256`. It scores the commit before (on a push the previous commit, on a pull request its base), then this commit once, on that same file (`discern-bench -compare`, or `-gate` for the target alone). It fails if wrong picks went up, or if wrong is over 0.5% of the discs acted on. New data can't fail a commit that changed nothing, except by breaking the 0.5% promise, which is real news. Both tables go in the job summary. With no benchmark before (a tag, a new branch), only the 0.5% target is checked. That is a **regression gate**: the number in the README stays true. Building this part, the gate caught the planned play-all check taking wrong picks from 2 to 62 (section 7).
 
 ---
 
@@ -551,7 +585,8 @@ Recordings come from real discs. When a disc behaves oddly in real use, its scan
 - **CI (GitHub Actions)**, on every pull request and push to main:
   - formatting, `go vet`, unit tests with the race detector (including the pin's signature check, which fails rather than skips in CI)
   - an image build for amd64, not pushed
-  - later: lint (`golangci-lint`) and the benchmark gate
+  - the selector's benchmark gate (section 8, decision D51)
+  - later: lint (`golangci-lint`)
   - Actions are pinned to commits, not tags: a tag can be moved to other code, a commit can't.
 - **Release** (decision D19, `release.yml`): a version tag `vX.Y.Z` runs, in order:
   1. the CI checks;
@@ -647,10 +682,21 @@ Recordings come from real discs. When a disc behaves oddly in real use, its scan
 | D36 | **The engine records a failure kind**, and the page turns it into plain words and a next step | Accepted (2026-11-16) | Errors say what they are (an optional `FailKind` method), so a reworded message never changes the page; any other error is named by its step. | The page matching the note's text (breaks silently when a message is reworded); the note as it is, with the messages folded under it (least work, technical wording) |
 | D37 | **The watchdog's diagnostics bundle is saved** under `/config/diagnostics` and **offered as a .zip** from the failure page | Accepted (2026-11-16) | The design always said it was saved (section 9.2); the code never wrote it, so a stall's evidence was lost. One download is what a MakeMKV bug report needs. | Saving it and showing the path (fetched over SSH); leaving it for v0.2 with the Backup + remux fallback (the design stays wrong until then) |
 | D38 | **TheDiscDB arrives as a compact daily index** built by Discern's own workflow and downloaded by Discern | Accepted (2026-11-16) | TheDiscDB's repository is about 1.6 GB, mostly images and history; the selector needs a few MB of it. Built daily, it is as fresh as the source; checksummed and validated, a bad copy is never used; kept on disk, Discern works offline. Refines D5. | The NAS downloading TheDiscDB's repository itself (1.6 GB each time, mostly images); the index built into each Discern release (only as fresh as the last release) |
-| D39 | **Match a disc to TheDiscDB by shape**, from the scan: playlist files, segment maps, lengths and sizes | Accepted (2026-11-16) | It uses only what MakeMKV's scan already gives, and survives MakeMKV numbering titles differently. ContentHash would be exact, but needs the disc's file list, and the container can't mount a disc. | ContentHash first (a UDF reader in Go, much more work); both at once (the largest part) |
+| D39 | **Match a disc to TheDiscDB by shape**, from the scan: playlist files, segment maps, lengths and sizes (amended by D46: the long titles' running time too) | Accepted (2026-11-16) | It uses only what MakeMKV's scan already gives, and survives MakeMKV numbering titles differently. ContentHash would be exact, but needs the disc's file list, and the container can't mount a disc. | ContentHash first (a UDF reader in Go, much more work); both at once (the largest part) |
 | D40 | **The selector and its benchmark come before auto-import**: the selector pre-selects and explains on the review page, and every disc still needs the user's approval | Accepted (2026-11-16) | The benchmark's number and some real discs should prove the selector before it acts alone. | Auto-import in the same part (one big part, unproven); only the index and title labels (no selector or benchmark yet) |
 | D41 | **Two `MainMovie` titles: ask, both named** | Accepted (2026-11-16) | Which cut to keep is the user's taste, not a fact the selector can know; naming both from TheDiscDB makes the question quick, and the cut picker builds on it. | Pick the longer cut (goes ahead alone, sometimes the wrong cut); a Settings preference for theatrical or longest (one more setting, and cut names vary) |
 | D42 | **Sign the TheDiscDB index before auto-import, not now** | Accepted (2026-11-16) | Until auto-import (D40), a bad index only changes what the review page pre-selects, and the user approves every disc; the SHA-256 already catches a damaged download. Signing proves origin, which matters once Discern acts alone; the method (a key of Discern's own, or cosign keyless) is decided with that part. | Sign now with Discern's own Ed25519 key (a key to keep as a GitHub secret, verified with Go's standard library); cosign keyless like the images (no key, but the sigstore-go library and its trust root in Discern) |
+| D43 | **The selector is its own package, `internal/selector`**: one pure function from the scan, the TheDiscDB match and the identified movie to a decision, saved with the job as JSON (migration 005) and shown on the review page | Accepted (2026-11-16) | The app and the benchmark run exactly the same code. Saved, the page shows what made the choice even after the daily index refresh changes the match, and the database stays the source of truth. | Grow `steps.Suggest` (no new package, but the benchmark would pull in the runner and Radarr); work the decision out again on each page view (no migration, but the page can change under the user) |
+| D44 | **Three confidence levels**: High (TheDiscDB names one main title), Medium (only one feature-length title after the decoy checks), Low (any hold). MakeMKV's mark alone is never more than a guess | Accepted (2026-11-16) | Simple to explain and to score: Low is "abstained" in the benchmark. Auto-import will want to tell TheDiscDB's evidence from the scan's. MakeMKV's mark can't be benchmarked (TheDiscDB's records don't keep it), so it can't be trusted alone yet. | Two levels, sure or guess (loses TheDiscDB versus scan); a weighted score (tunable, but opaque and easy to overfit) |
+| D45 | **Decoy checks, measured**: feature-length is 45 min; duplicates ±0.5 s and ±0.1%; too little data is under 3 Mbit/s or under half the richest feature-length title's bitrate; three or more within 2% are lookalikes; **act only when one feature-length title remains**, else hold. No play-all check for movies | Accepted (2026-11-16); leaving out play-all, found while building, accepted the same day | One title left: 0.08% wrong, 10.7% asked on unseen discs. Picking the longest when it leads by over 10 min would ask 6.5% but be wrong 0.38%, too near the 0.5% target. The planned play-all check dropped the film itself on 60 discs (wrong 2 → 62). | Longest when it leads by over 10 min (fewer questions, 0.38% wrong); by over 3 min (0.64% wrong, over the target); a fixed 3 Mbit/s floor alone (catches 1 of 129 bad longest picks) |
+| D46 | **A match also needs the running time**: the matched titles cover 90% of the running time of the scan's titles of 20 min or more. Amends D39 | Accepted (2026-11-16) | Big 4K discs share hundreds of identical studio clips: on title counts alone, 60 discs with their own release hidden matched another movie (1917 matched Jaws). With the running time, 24 are left, all double features filed under both films. With the index whole, discs that match their own record rise from 3,097 to 3,290 of 3,343: clip-only matches with other movies no longer cause fail-closed ties. | Require TheDiscDB's main title among the matched (helps only discs that have one); leave Match alone and rely on D47's cross-check |
+| D47 | **TheDiscDB's movie fills in when the disc's name found none**; when both are known and differ, the name's stays, with a hold and a one-tap "Use it" | Accepted (2026-11-16) | A label-less disc TheDiscDB knows needs no typing. A pressing TheDiscDB doesn't know can still match another disc (D46 leaves double features), so it doesn't overrule the name alone. | TheDiscDB always wins (wrong for unknown pressings that match another disc); the match never touches the movie (wastes the evidence) |
+| D48 | **A match with no main title**: use its movie and its classes (titles it calls `Extra`, `Trailer`... are ruled out), then the scan decides, at most Medium | Accepted (2026-11-16) | About 245 discs name no main movie; what they do say still narrows the choice. | Ignore the match for selection; always hold |
+| D49 | **Two main titles on the review page**: both listed first with TheDiscDB's names, neither ticked; approving without one says "Choose a cut" | Accepted (2026-11-16) | The user's choice (D41), made in one tap. Radarr keeps one file per movie, so ticking both would need a second choice at import. A double feature's two films are shown the same way. | Both ticked |
+| D50 | **The benchmark uses the published index**, hides each disc's release and every disc with the same ContentHash, counts the same video through another playlist as right, gates on discs with one main movie and reports discs with two apart | Accepted (2026-11-16) | It is the exact data the app uses, 3.3 MB. Cloning TheDiscDB adds nothing the benchmark needs: neither has chapters or MakeMKV's mark. Hiding by ContentHash keeps a double feature's other copy from giving the answer away. | A frozen copy in `testdata` (deterministic, but 3.3 MB per refresh and ageing data); cloning TheDiscDB in CI (378 MB, slow, the same data) |
+| D51 | **The CI gate scores the commit and the one before it on the same downloaded index**: it fails if wrong picks go up, or if wrong is over 0.5% of the discs acted on | Accepted (2026-11-16) | Data drift can't fail a commit that changed nothing. The owner pushes to main, so the base is the previous commit on a push, and a pull request's base otherwise. The 0.5% ceiling keeps the README's promise. | A committed baseline file with a frozen index (needs the frozen copy); the 0.5% ceiling only (wouldn't notice 0.1% → 0.4%) |
+| D52 | **Hold when a shorter title is much richer**: a title of 20 min or more, shorter than the pick, carrying over 1.25 times its data per second | Accepted (2026-11-16) | The film may be under 45 minutes, a TV special beside a long documentary (*Frosty the Snowman*). It fixes that wrong pick for 3 more questions (302 → 305) and 2 fewer right picks. | Lower feature length to 20 min (also fixes it, but asks on 21.2% of discs); 30 min (doesn't fix it); leave it as a known limit |
+| D53 | **Hold when TheDiscDB's record looks wrong**: its one main title is under 45 min while a title it leaves unclassified is feature-length and over twice as long; the scan decides. The benchmark doesn't score a disc whose answer fails the same rule, and lists it | Accepted (2026-11-16) | TheDiscDB's 4K record of *The Woman King* names a 9:48 extra as the movie, and Discern pre-ticked it at High; the benchmark couldn't notice, scoring against the same answer. The rule flags only that record in the catalogue, and a short film beside a long title the record calls an extra isn't flagged. One rule for both keeps the benchmark from excluding discs by hand. | A hand-kept errata list (exact, but hand-picked exclusions invite cherry-picking and need upkeep); the hold only, still scoring the disc as wrong (a permanent wrong pick that isn't the selector's) |
 
 ---
 

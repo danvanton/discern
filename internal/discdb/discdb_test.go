@@ -166,20 +166,36 @@ func TestMatchNeedsTheWholeShape(t *testing.T) {
 		t.Errorf("10 of %d titles matched the whole disc", len(whole.Titles))
 	}
 
-	// A different length: that title doesn't line up.
+	// A different length: that title doesn't line up. One short title off
+	// doesn't lose the match.
 	moved := *whole
 	moved.Titles = slices.Clone(whole.Titles)
+	short := -1
 	for i := range moved.Titles {
-		if moved.Titles[i].Index == 29 {
+		if moved.Titles[i].Duration < 10*time.Minute && moved.Titles[i].Duration > time.Minute {
+			short = moved.Titles[i].Index
 			moved.Titles[i].Duration += 3 * time.Second
+			break
 		}
 	}
 	m := ix.Match(&moved, nil)
 	if m == nil {
-		t.Fatal("one title off shouldn't lose the match")
+		t.Fatal("one short title off shouldn't lose the match")
 	}
-	if _, ok := m.Titles[29]; ok || len(m.Mains()) != 0 {
-		t.Error("a title 3 s off was still taken for TheDiscDB's main movie")
+	if _, ok := m.Titles[short]; ok {
+		t.Errorf("title %d, 3 s off, still lined up", short)
+	}
+	// The film itself off: most of the running time is unmatched, so the
+	// disc doesn't match at all (decision D46).
+	film := *whole
+	film.Titles = slices.Clone(whole.Titles)
+	for i := range film.Titles {
+		if film.Titles[i].Index == 29 {
+			film.Titles[i].Duration += 3 * time.Second
+		}
+	}
+	if m := ix.Match(&film, nil); m != nil {
+		t.Error("matched with the film's own title 3 s off")
 	}
 	// Within the slack: 2 s and 0.4% still line up.
 	near := *whole
@@ -212,11 +228,19 @@ func TestMatchFailsClosedOnATie(t *testing.T) {
 	if m := ix.Match(scan(t, "scan-star-trek-iii-uhd.json"), nil); m != nil {
 		t.Errorf("matched %s though another movie's disc fits as well", m.Disc.Movie.Title)
 	}
+	// Lookup says which movies tied, by TMDb id.
+	if m, tied := ix.Lookup(scan(t, "scan-star-trek-iii-uhd.json"), nil); m != nil || len(tied) != 2 ||
+		tied[0].TMDbID != 157 || tied[1].TMDbID != 999999 {
+		t.Errorf("Lookup: %v, tied %+v", m, tied)
+	}
 	// The same disc in another release of the same movie is no tie.
 	ix.Discs[len(ix.Discs)-1].Movie = st3.Movie
 	ix.prepare()
 	if m := ix.Match(scan(t, "scan-star-trek-iii-uhd.json"), nil); m == nil || m.Disc.Movie.TMDbID != 157 {
 		t.Error("the same disc in two releases of one movie should still match")
+	}
+	if _, tied := ix.Lookup(scan(t, "scan-star-trek-iii-uhd.json"), nil); tied != nil {
+		t.Errorf("one movie in two releases tied: %+v", tied)
 	}
 }
 
@@ -289,14 +313,7 @@ func title(idx int, file, segs string, secs int, size int64) Title {
 	return Title{Index: idx, File: file, Segments: segs, Seconds: secs, Size: size}
 }
 
-func scanOf(titles ...Title) *makemkv.Disc {
-	d := &makemkv.Disc{}
-	for _, t := range titles {
-		d.Titles = append(d.Titles, makemkv.Title{Index: t.Index, SourceFile: t.File, SegmentMap: t.Segments,
-			Duration: time.Duration(t.Seconds) * time.Second, SizeBytes: t.Size})
-	}
-	return d
-}
+func scanOf(titles ...Title) *makemkv.Disc { return (&Disc{Titles: titles}).Scan() }
 
 // Any second movie that fits is a tie, even one title behind.
 func TestMatchFailsClosedOnANearTie(t *testing.T) {
@@ -400,5 +417,24 @@ func TestTheSameDataGivesTheSameIndex(t *testing.T) {
 	}
 	if !bytes.Equal(a.Bytes(), b.Bytes()) {
 		t.Error("two builds of the same data differ")
+	}
+}
+
+// Two discs that share a studio's clips but not the film don't match
+// (decision D46): 1917's 4K disc matched Jaws's on clips alone.
+func TestMatchNeedsTheFilmsRunningTime(t *testing.T) {
+	var clips []Title
+	for i := 0; i < 100; i++ {
+		clips = append(clips, title(i, fmt.Sprintf("%05d.mpls", i), fmt.Sprint(i), 30+i, int64(1e7)+int64(i)))
+	}
+	jaws := Disc{Movie: Movie{TMDbID: 578, Title: "Jaws"}, Release: "4k",
+		Titles: append(slices.Clone(clips), title(100, "00800.mpls", "800", 7445, 80e9))}
+	ix := small(jaws)
+	other := scanOf(append(slices.Clone(clips), title(100, "00801.mpls", "801", 7140, 75e9))...)
+	if m := ix.Match(other, nil); m != nil {
+		t.Errorf("matched %s on its shared clips alone", m.Disc.Movie.Title)
+	}
+	if m := ix.Match(scanOf(jaws.Titles...), nil); m == nil {
+		t.Error("the disc itself no longer matches")
 	}
 }

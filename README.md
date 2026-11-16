@@ -12,7 +12,7 @@ Discern watches your optical drive, works out which titles on a Blu-ray, UHD or 
 
 Tools like [ARM](https://github.com/automatic-ripping-machine/automatic-ripping-machine), [Rexarr](https://github.com/MoonlightLaboratory/rexarr), [BluForge](https://github.com/JohnPostlethwait/BluForge) and [Engram](https://github.com/Jsakkos/engram) already rip discs. Discern focuses on two things none of them publish numbers for:
 
-- **Picking the right title, measurably.** A benchmark over [TheDiscDB](https://thediscdb.com)'s catalogue scores every change. The baseline, "take the longest title", is wrong on 7.3% of 2,627 movie discs.
+- **Picking the right title, measurably.** A benchmark over [TheDiscDB](https://thediscdb.com)'s catalogue scores every change, and CI fails a change that picks more wrong titles. On 2,818 movie discs, "take the longest title" gives the wrong film on 4.5%. Discern's selector, on discs TheDiscDB doesn't know, is wrong on none of the 2,512 it would pick alone, and asks you on 10.9%; on discs TheDiscDB knows, it is right on 99.5% ([details](docs/DESIGN.md#8-measuring-it-the-benchmark)). For now it only pre-selects: you approve every disc.
 - **Safe automation.** Discern imports on its own only when the evidence agrees. A watchdog catches rips that stall without an error, and retries them a different way.
 
 ## Try it without a drive

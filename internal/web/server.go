@@ -540,6 +540,9 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 			// Worded here, where the form is: the engine doesn't know the page.
 			msg = "Choose the movie first: search for it by name above the titles."
 		}
+		if errors.Is(err, jobs.ErrNoTitles) && j.Selection != nil && len(j.Selection.Choices) > 0 {
+			msg = "Choose a cut: tick one of the main titles TheDiscDB names."
+		}
 		s.showJob(w, r, http.StatusUnprocessableEntity, msg)
 		return
 	}

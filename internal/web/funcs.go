@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/danvanton/discern/internal/drive"
 	"github.com/danvanton/discern/internal/format"
@@ -25,6 +27,11 @@ var funcs = template.FuncMap{
 	"date":  func(t time.Time) string { return t.Local().Format("2 Jan 2006") },
 	"label": stateLabel,
 	"kind":  stateKind,
+
+	// The selector's reasons, and TheDiscDB's classes (decision D43).
+	"sentence":  sentence,
+	"className": className,
+
 	"chosen": func(j *jobs.Job, idx int) bool {
 		return slices.Contains(j.Titles, idx)
 	},
@@ -69,10 +76,7 @@ var funcs = template.FuncMap{
 		if m == nil {
 			return "unknown"
 		}
-		if m.Year > 0 {
-			return fmt.Sprintf("%s (%d)", m.Title, m.Year)
-		}
-		return m.Title
+		return m.Name()
 	},
 	"waiting": func(s jobs.State) bool { return s == jobs.NeedsYou },
 	"failed":  func(s jobs.State) bool { return s == jobs.Failed },
@@ -204,4 +208,32 @@ func ago(t time.Time) string {
 		return fmt.Sprintf("%d h ago", int(d.Hours()))
 	}
 	return t.Local().Format("2 Jan 2006")
+}
+
+// sentence starts s with a capital and ends it with a full stop: the
+// selector's reasons are clauses ("title 29 (1:45:14) is ...").
+func sentence(s string) string {
+	if s == "" {
+		return s
+	}
+	r, n := utf8.DecodeRuneInString(s)
+	s = string(unicode.ToUpper(r)) + s[n:]
+	if !strings.HasSuffix(s, ".") {
+		s += "."
+	}
+	return s
+}
+
+// className turns TheDiscDB's class into words: "DeletedScene" is
+// "Deleted scene", "MainMovie" "Main movie".
+func className(c string) string {
+	var b strings.Builder
+	for i, r := range c {
+		if i > 0 && unicode.IsUpper(r) {
+			b.WriteByte(' ')
+			r = unicode.ToLower(r)
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }

@@ -148,6 +148,26 @@ func TestMoveSavesTheFailure(t *testing.T) {
 	}
 }
 
+// The selector's decision (decision D43) is saved with the job, labels and
+// all.
+func TestMoveSavesTheSelection(t *testing.T) {
+	s, _ := openTest(t)
+	j, _ := s.CreateJob(ctx, "/dev/sr0")
+	if got, _ := s.Job(ctx, j.ID); got.Selection != nil {
+		t.Errorf("a new job has a selection: %+v", got.Selection)
+	}
+	j.Selection = &jobs.Selection{Titles: []int{}, Choices: []int{3, 7}, Confidence: jobs.Low,
+		Reason: "two cuts", Reasons: []string{"TheDiscDB knows this disc"}, Holds: []string{"two cuts"},
+		Labels: map[int]jobs.TitleLabel{3: {Type: "MainMovie", Name: "Theatrical"}, 7: {Type: "MainMovie", Name: "Director's Cut"}},
+		Movie:  &jobs.Movie{TMDbID: 348, Title: "Alien", Year: 1979}}
+	if err := s.Move(ctx, j, jobs.Scanning, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Job(ctx, j.ID); !reflect.DeepEqual(got.Selection, j.Selection) {
+		t.Errorf("selection = %+v; want %+v", got.Selection, j.Selection)
+	}
+}
+
 // Move is a compare-and-swap: a stale copy of the job can't overwrite a newer
 // state.
 func TestMoveRefusesAStaleJob(t *testing.T) {

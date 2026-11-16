@@ -26,12 +26,52 @@ type review struct {
 	Search *search   // results of a movie search, if one was made
 	Pick   *pickView // a movie chosen on this page, not yet saved
 	Movie  int       // the TMDb id the approve form sends
+
+	// Decision is the selector's; nil for a job selected before it was
+	// saved.
+	Decision *decisionView
+	// DiscDBSays is the movie TheDiscDB names for the disc when it isn't
+	// the job's movie (decision D47), offered as one tap.
+	DiscDBSays *jobs.Movie
+	// DiscDBAgrees is true when TheDiscDB names the job's movie.
+	DiscDBAgrees bool
 }
 
 // titleRow is one title in the review page's list.
 type titleRow struct {
 	makemkv.Title
 	Chosen bool
+	Label  *jobs.TitleLabel // what TheDiscDB says it is, if it knows the disc
+}
+
+// decisionView is the selector's decision as the page shows it
+// (decision D43): how sure it is, what would stop it acting alone, and
+// what the evidence was.
+type decisionView struct {
+	Badge   string // e.g. "Check"
+	Class   string // the badge's colour
+	Summary string // the decisive reason, when nothing holds it
+	Holds   []string
+	Reasons []string
+}
+
+func viewDecision(sel *jobs.Selection) *decisionView {
+	if sel == nil {
+		return nil
+	}
+	v := &decisionView{Holds: sel.Holds, Reasons: sel.Reasons}
+	switch sel.Confidence {
+	case jobs.High:
+		v.Badge, v.Class = "Known disc", "ok"
+	case jobs.Medium:
+		v.Badge, v.Class = "Likely", "busy"
+	default:
+		v.Badge, v.Class = "Check", "ask"
+	}
+	if len(sel.Holds) == 0 {
+		v.Summary = sel.Reason
+	}
+	return v
 }
 
 // titleGroups is the disc's titles grouped against the chosen ones (D32).
@@ -48,16 +88,23 @@ const (
 )
 
 // groupTitles sorts the disc's titles into the review page's groups, each
-// longest first. The main length is the longest chosen title's, or the
-// longest title's if none is chosen.
+// longest first. The chosen titles come first, with the cuts the user must
+// choose between (decision D49), unticked. The main length is the longest
+// of those, or the longest title's if there are none.
 func groupTitles(j *jobs.Job) titleGroups {
 	var g titleGroups
 	if j.Disc == nil {
 		return g
 	}
+	var choices []int
+	var labels map[int]jobs.TitleLabel
+	if j.Selection != nil {
+		choices, labels = j.Selection.Choices, j.Selection.Labels
+	}
+	isMain := func(idx int) bool { return slices.Contains(j.Titles, idx) || slices.Contains(choices, idx) }
 	var main time.Duration
 	for _, t := range j.Disc.Titles {
-		if slices.Contains(j.Titles, t.Index) {
+		if isMain(t.Index) {
 			main = max(main, t.Duration)
 		}
 	}
@@ -68,8 +115,11 @@ func groupTitles(j *jobs.Job) titleGroups {
 	}
 	for _, t := range j.Disc.Titles {
 		row := titleRow{Title: t, Chosen: slices.Contains(j.Titles, t.Index)}
+		if l, ok := labels[t.Index]; ok {
+			row.Label = &l
+		}
 		switch {
-		case row.Chosen:
+		case isMain(t.Index):
 			g.Main = append(g.Main, row)
 		case float64(t.Duration) >= cutShare*float64(main):
 			g.Cuts = append(g.Cuts, row)
@@ -255,8 +305,15 @@ func postedTitles(form url.Values) []int {
 // none. A failed lookup is reported on the page, never as a page error.
 func (s *server) reviewFor(ctx context.Context, j *jobs.Job, pick int, q string) (review, string) {
 	st, err := s.b.Settings(ctx)
-	rv := review{Groups: groupTitles(j), Langs: langChoiceFor(j, st.Languages)}
+	rv := review{Groups: groupTitles(j), Decision: viewDecision(j.Selection), Langs: langChoiceFor(j, st.Languages)}
 	rv.Langs.Unreadable = err != nil
+	if j.Selection != nil && j.Selection.Movie != nil {
+		if j.Movie != nil && j.Movie.TMDbID == j.Selection.Movie.TMDbID {
+			rv.DiscDBAgrees = true
+		} else {
+			rv.DiscDBSays = j.Selection.Movie
+		}
+	}
 	if j.Movie != nil {
 		rv.Movie = j.Movie.TMDbID
 	}

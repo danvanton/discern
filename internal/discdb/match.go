@@ -31,6 +31,14 @@ const (
 // can't match on a few short, common clips that many discs share.
 const coverage = 0.9
 
+// longTitle is where the running-time test starts (decision D46): the
+// matched titles must also cover nearly all the running time of the scan's
+// titles this long or longer. Large 4K discs share hundreds of identical
+// studio clips, so counting titles alone let a disc TheDiscDB doesn't know
+// match another movie's disc (1917 matched Jaws) on clips alone, with the
+// films themselves unmatched.
+const longTitle = 20 * time.Minute
+
 // prepare builds the lookup Match uses. A title without a playlist or a
 // segment map has no shape to match by, so it isn't indexed: matching on
 // length and size alone isn't matching by shape.
@@ -83,8 +91,16 @@ func (m *Match) Mains() []int {
 // It fails closed: if discs of two different movies both fit, it matches
 // neither, however much better one fits than the other.
 func (ix *Index) Match(d *makemkv.Disc, skip func(*Disc) bool) *Match {
+	m, _ := ix.Lookup(d, skip)
+	return m
+}
+
+// Lookup is Match that also says why there is no match: when discs of two
+// or more movies fit, it returns those movies, ordered by TMDb id (a double
+// feature filed under each of its films, say).
+func (ix *Index) Lookup(d *makemkv.Disc, skip func(*Disc) bool) (*Match, []Movie) {
 	if ix == nil || d == nil || len(d.Titles) == 0 {
-		return nil
+		return nil, nil
 	}
 	// For each candidate disc, which scan titles line up with which of its
 	// titles. A scan title counts once per disc.
@@ -109,13 +125,15 @@ func (ix *Index) Match(d *makemkv.Disc, skip func(*Disc) bool) *Match {
 		}
 	}
 	best, bestCount, classified := -1, 0, 0
+	fits := map[int]Movie{} // the movies whose discs fit, by TMDb id
 	for di, titles := range found {
 		if !ix.covers(di, d, titles) {
 			continue
 		}
 		kd := &ix.Discs[di]
+		fits[kd.Movie.TMDbID] = kd.Movie
 		if best >= 0 && ix.Discs[best].Movie.TMDbID != kd.Movie.TMDbID {
-			return nil // two movies fit: trust neither
+			continue // two movies fit: trust neither (below)
 		}
 		n, c := len(titles), classifiedCount(kd)
 		// The same movie in another release: keep the better fit, then the
@@ -124,14 +142,35 @@ func (ix *Index) Match(d *makemkv.Disc, skip func(*Disc) bool) *Match {
 			best, bestCount, classified = di, n, c
 		}
 	}
+	if len(fits) > 1 {
+		tied := make([]Movie, 0, len(fits))
+		for _, mv := range fits {
+			tied = append(tied, mv)
+		}
+		slices.SortFunc(tied, func(a, b Movie) int { return a.TMDbID - b.TMDbID })
+		return nil, tied
+	}
 	if best < 0 {
-		return nil
+		return nil, nil
 	}
 	m := &Match{Disc: &ix.Discs[best], Titles: map[int]Title{}}
 	for idx, pos := range found[best] {
 		m.Titles[idx] = ix.Discs[best].Titles[pos]
 	}
-	return m
+	return m, nil
+}
+
+// Scan is the scan MakeMKV would give of this disc, from its record. The
+// records keep no chapters and no MakeMKV main-feature mark.
+func (d *Disc) Scan() *makemkv.Disc {
+	out := &makemkv.Disc{Name: d.Name}
+	for _, t := range d.Titles {
+		out.Titles = append(out.Titles, makemkv.Title{
+			Index: t.Index, SourceFile: t.File, SegmentMap: t.Segments,
+			Duration: time.Duration(t.Seconds) * time.Second, SizeBytes: t.Size,
+		})
+	}
+	return out
 }
 
 // covers reports whether the matched titles cover nearly all of both
@@ -139,13 +178,22 @@ func (ix *Index) Match(d *makemkv.Disc, skip func(*Disc) bool) *Match {
 // count: a record made with MakeMKV's default minimum length (2 minutes)
 // has none of the short clips Discern's scan (no minimum) lists. On the
 // known disc's side, its own titles found count, each once, however many
-// scan titles share one.
+// scan titles share one. The scan's long titles must also be covered by
+// running time (longTitle).
 func (ix *Index) covers(di int, d *makemkv.Disc, titles map[int]int) bool {
 	eligible := 0
+	var long, longFound time.Duration
 	for _, st := range d.Titles {
 		secs := int(st.Duration.Round(time.Second) / time.Second)
-		if hasShape(st.SourceFile, st.SegmentMap) && secs >= ix.shortest[di]-lengthSlack {
-			eligible++
+		if !hasShape(st.SourceFile, st.SegmentMap) || secs < ix.shortest[di]-lengthSlack {
+			continue
+		}
+		eligible++
+		if st.Duration >= longTitle {
+			long += st.Duration
+			if _, ok := titles[st.Index]; ok {
+				longFound += st.Duration
+			}
 		}
 	}
 	distinct := map[int]bool{}
@@ -153,7 +201,8 @@ func (ix *Index) covers(di int, d *makemkv.Disc, titles map[int]int) bool {
 		distinct[pos] = true
 	}
 	return float64(len(titles)) >= coverage*float64(eligible) &&
-		float64(len(distinct)) >= coverage*float64(ix.shaped[di])
+		float64(len(distinct)) >= coverage*float64(ix.shaped[di]) &&
+		float64(longFound) >= coverage*float64(long)
 }
 
 func sameLength(st makemkv.Title, t Title) bool {

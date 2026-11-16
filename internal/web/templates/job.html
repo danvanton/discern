@@ -139,6 +139,8 @@
   {{else}}
   <p class="note">Discern couldn't tell which movie this is. Search for it below.</p>
   {{end}}{{end}}
+  {{with $rv.DiscDBSays}}<p class="small">TheDiscDB says this disc is <strong>{{movieName .}}</strong>. <a href="/jobs/{{$id}}?tmdb={{.TMDbID}}">Use it</a></p>{{end}}
+  {{if and $rv.DiscDBAgrees (not $rv.Pick)}}<p class="muted small">TheDiscDB knows this disc as this movie.</p>{{end}}
   <details class="search"{{if or $rv.Search (not .Job.Movie)}} open{{end}}>
     <summary>{{if .Job.Movie}}Wrong movie? Search{{else}}Find the movie{{end}}</summary>
     <form method="get" action="/jobs/{{$id}}" role="search" class="search-form">
@@ -173,7 +175,15 @@
   <input type="hidden" name="tmdb_id" value="{{if $rv.Movie}}{{$rv.Movie}}{{end}}">
   <h2>Titles to rip</h2>
   {{range $rv.Groups.Main}}{{template "titlerow" .}}{{end}}
-  {{if .Job.Note}}<p class="muted small">Suggested because {{.Job.Note}}.</p>{{end}}
+  {{with $rv.Decision}}
+  <div class="decision">
+    <p class="small"><span class="badge {{.Class}}">{{.Badge}}</span>{{with .Summary}} {{sentence .}}{{end}}</p>
+    {{with .Holds}}<ul class="holds">{{range .}}<li>{{sentence .}}</li>{{end}}</ul>{{end}}
+    {{with .Reasons}}<details class="group"><summary>How Discern chose</summary>
+      <ul class="reasons muted small">{{range .}}<li>{{sentence .}}</li>{{end}}</ul>
+    </details>{{end}}
+  </div>
+  {{else}}{{if .Job.Note}}<p class="muted small">Suggested because {{.Job.Note}}.</p>{{end}}{{end}}
   {{with $rv.Groups.Cuts}}
   <details class="group" open><summary>Possible other cuts ({{len .}})</summary>
     <p class="muted small">Nearly as long as the title above: perhaps another cut of the movie.</p>
@@ -222,6 +232,7 @@
   <input type="checkbox" name="title" value="{{.Index}}"{{if .Chosen}} checked{{end}}>
   <span class="title-len">{{clock .Duration}}</span>
   <span class="title-info">{{bytes .SizeBytes}} · {{.Chapters}} chapters{{with res .Title}} · {{.}}{{end}}{{if .MakeMKVMainFeature}} · <span class="badge ask" title="MakeMKV marked this as the main feature">main</span>{{end}}
+    {{with .Label}}<span class="small"><span class="badge {{if eq .Type "MainMovie"}}ok{{else}}off{{end}}" title="What TheDiscDB says this title is">{{with .Type}}{{className .}}{{else}}TheDiscDB{{end}}</span>{{with .Name}} {{.}}{{end}}</span>{{end}}
     <span class="muted small">Title {{.Index}}{{with .SourceFile}} · {{.}}{{end}}{{with audio .Title}} · {{.}}{{end}}</span>
   </span>
 </label>
