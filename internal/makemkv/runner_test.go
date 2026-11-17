@@ -50,7 +50,10 @@ func testRunner(t *testing.T, sc fake.Scenario) *Runner {
 	r := NewRunner(exe)
 	r.Watchdog = fastWatchdog
 	r.KillAfter = 2 * time.Second
-	r.Env = []string{fake.EnvVar + "=" + string(raw)}
+	// Under -race the fake (this test binary) sleeps 1 s before it exits, by
+	// default, for late race reports. That pause reads and writes nothing,
+	// so fastWatchdog's 1 s HangAfter would call a finished run hung.
+	r.Env = []string{fake.EnvVar + "=" + string(raw), "GORACE=atexit_sleep_ms=0"}
 	return r
 }
 
