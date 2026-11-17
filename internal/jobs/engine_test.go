@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -28,6 +29,7 @@ type fakeSteps struct {
 	calls []string
 
 	auto        bool                // Select returns Auto
+	trial       bool                // Select returns Trial
 	noMovie     bool                // Identify finds no movie
 	selMovie    *jobs.Movie         // the movie Select's TheDiscDB match names
 	discChanged bool                // CheckDisc reports a different disc
@@ -81,7 +83,7 @@ func (f *fakeSteps) Identify(context.Context, *jobs.Job) (*jobs.Movie, error) {
 	return &jobs.Movie{TMDbID: 1, Title: "Sample", Year: 2020}, f.record("identify")
 }
 func (f *fakeSteps) Select(context.Context, *jobs.Job) (jobs.Selection, error) {
-	return jobs.Selection{Titles: []int{0}, Auto: f.auto, Reason: "longest title", Confidence: jobs.Medium,
+	return jobs.Selection{Titles: []int{0}, Auto: f.auto, Trial: f.trial, Reason: "longest title", Confidence: jobs.Medium,
 		Reasons: []string{"longest title"}, Movie: f.selMovie}, f.record("select")
 }
 func (f *fakeSteps) Rip(ctx context.Context, j *jobs.Job, dir string, progress func(float64)) error {
@@ -429,7 +431,9 @@ func TestRestartResumesFromEveryState(t *testing.T) {
 		t.Run(string(crashedIn), func(t *testing.T) {
 			e := newEnv(t, &fakeSteps{auto: true})
 			j, _ := e.store.CreateJob(ctx, "/dev/sr0")
-			j.Disc, j.Titles = sampleDisc, []int{0}
+			// What the steps before the crash saved: a crash in Selecting
+			// has Identify's movie.
+			j.Disc, j.Titles, j.Movie = sampleDisc, []int{0}, &jobs.Movie{TMDbID: 1, Title: "Sample", Year: 2020}
 			for _, st := range path[1 : i+1] {
 				if err := e.store.Move(ctx, j, st, ""); err != nil {
 					t.Fatal(err)
@@ -762,6 +766,81 @@ func TestRetryOnABusyDriveFails(t *testing.T) {
 	}
 	if err := e.engine.Retry(ctx, first.ID); !errors.Is(err, jobs.ErrDriveBusy) {
 		t.Errorf("err = %v, want ErrDriveBusy", err)
+	}
+}
+
+// An auto selection rips without asking, and the job's note says so.
+func TestAutoRipsWithoutAsking(t *testing.T) {
+	e := newEnv(t, &fakeSteps{auto: true})
+	j, _ := e.store.CreateJob(ctx, "/dev/sr0")
+	if err := e.engine.Run(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := e.store.Job(ctx, j.ID)
+	if got.State != jobs.Done || got.Note != "ripped without asking (auto-import): longest title" {
+		t.Errorf("state %s, note %q", got.State, got.Note)
+	}
+}
+
+// An auto selection without a movie waits for the user: the import would
+// have nothing to import as.
+func TestAutoWithoutAMovieWaits(t *testing.T) {
+	e := newEnv(t, &fakeSteps{auto: true, noMovie: true})
+	j, _ := e.store.CreateJob(ctx, "/dev/sr0")
+	if err := e.engine.Run(ctx, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := e.store.Job(ctx, j.ID); got.State != jobs.NeedsYou || got.Note != "not ripped on its own: there is no movie to import it as" {
+		t.Errorf("state %s, note %q; want needs_you with the reason", got.State, got.Note)
+	}
+}
+
+// On trial, approving records whether the user chose what Discern would
+// have (the same titles, in any order, and the same movie); the tally
+// counts it (decision D62).
+func TestApprovingATrialRecordsAgreement(t *testing.T) {
+	movie := &jobs.Movie{TMDbID: 1, Title: "Sample", Year: 2020}
+	for _, c := range []struct {
+		name   string
+		titles []int
+		movie  *jobs.Movie
+		agreed bool
+	}{
+		{"same", []int{0}, nil, true},
+		{"other titles", []int{0, 1}, nil, false},
+		{"other movie", []int{0}, &jobs.Movie{TMDbID: 2, Title: "Other"}, false},
+	} {
+		e := newEnv(t, &fakeSteps{trial: true, selMovie: movie})
+		j, _ := e.store.CreateJob(ctx, "/dev/sr0")
+		if err := e.engine.Run(ctx, j.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.engine.Approve(ctx, j.ID, c.titles, c.movie, nil); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := e.store.Job(ctx, j.ID)
+		if got.Selection.Agreed == nil || *got.Selection.Agreed != c.agreed {
+			t.Errorf("%s: agreed %v, want %v", c.name, got.Selection.Agreed, c.agreed)
+		}
+		tally, err := e.store.TrialTally(ctx)
+		want := jobs.TrialTally{Agreed: 1}
+		if !c.agreed {
+			want = jobs.TrialTally{Differed: []int64{j.ID}}
+		}
+		if err != nil || !reflect.DeepEqual(tally, want) {
+			t.Errorf("%s: tally %+v, %v; want %+v", c.name, tally, err, want)
+		}
+	}
+	// Not on trial: nothing is recorded.
+	e := newEnv(t, &fakeSteps{selMovie: movie})
+	j, _ := e.store.CreateJob(ctx, "/dev/sr0")
+	e.engine.Run(ctx, j.ID)
+	e.engine.Approve(ctx, j.ID, []int{0}, nil, nil)
+	if got, _ := e.store.Job(ctx, j.ID); got.Selection.Agreed != nil {
+		t.Error("agreement recorded outside a trial")
+	}
+	if tally, _ := e.store.TrialTally(ctx); tally.Total() != 0 {
+		t.Errorf("tally %+v outside a trial", tally)
 	}
 }
 

@@ -135,6 +135,23 @@ func TestImportRefusesToReplaceAFile(t *testing.T) {
 	}
 }
 
+// HasFile answers auto-import's question (decision D61): not in the
+// library, in it without a file, and with one.
+func TestHasFile(t *testing.T) {
+	s := newSetup(t)
+	if has, err := s.imp.HasFile(ctx, 603); err != nil || has {
+		t.Errorf("not in the library: %v, %v", has, err)
+	}
+	s.fake.AddLibraryMovie(603, "The Matrix", 1999, false)
+	if has, err := s.imp.HasFile(ctx, 603); err != nil || has {
+		t.Errorf("in the library without a file: %v, %v", has, err)
+	}
+	s.fake.AddLibraryMovie(604, "The Matrix Reloaded", 2003, true)
+	if has, err := s.imp.HasFile(ctx, 604); err != nil || !has {
+		t.Errorf("with a file: %v, %v", has, err)
+	}
+}
+
 // After a crash between Radarr finishing and the job being saved as Done,
 // the engine runs Import again. It must see the work is done.
 func TestImportAgainAfterItHappenedIsANoOp(t *testing.T) {

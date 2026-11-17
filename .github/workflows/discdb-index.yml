@@ -5,6 +5,7 @@ name: TheDiscDB index
 #
 #   discdb-index.json.gz         the index (format: internal/discdb)
 #   discdb-index.json.gz.sha256  its SHA-256, checked by Discern
+#   discdb-index.json.gz.sig     its Ed25519 signature (decision D59), checked by Discern
 #   discdb-index-LICENSE.txt     TheDiscDB's MIT licence, which the data is under
 #
 # Only the disc records are fetched. TheDiscDB's repository is about 1.6 GB,
@@ -56,9 +57,15 @@ jobs:
       # discern-index reads the index back before writing it, so a bad one is
       # never published; records that don't parse are listed and skipped. It
       # is dated by TheDiscDB's commit, so unchanged data gives the same bytes
-      # and Discern doesn't download it again.
-      - name: Build the index
-        run: go run ./cmd/discern-index -data thediscdb -source "$SOURCE" -built "$BUILT" -out discdb-index.json.gz
+      # and Discern doesn't download it again. It signs the index with the
+      # secret key and checks the signature with the public key Discern
+      # trusts: with a missing or wrong key, the step fails and nothing is
+      # published. Ed25519 signatures are deterministic, so unchanged data
+      # gives the same signature too.
+      - name: Build and sign the index
+        env:
+          DISCDB_SIGNING_KEY: ${{ secrets.DISCDB_SIGNING_KEY }}
+        run: go run ./cmd/discern-index -data thediscdb -source "$SOURCE" -built "$BUILT" -out discdb-index.json.gz -sign
 
       - name: Publish it
         env:
@@ -73,8 +80,11 @@ jobs:
               --notes "The disc data Discern uses to recognise known discs, built every day from [TheDiscDB](https://github.com/TheDiscDb/data) (MIT licence, see discdb-index-LICENSE.txt) by the TheDiscDB index workflow. Discern downloads it by itself."
           fi
           # The checksum goes up last: a Discern downloading in between finds
-          # the new index and the old checksum disagree, keeps its last good
-          # index, and tries again later.
+          # the new index and the old checksum disagree (or the new index and
+          # the old signature), keeps its last good index, and tries again
+          # later. Once the new checksum is up, the index and signature it
+          # names are already there.
           gh release upload discdb-index --repo "$REPO" --clobber discdb-index.json.gz discdb-index-LICENSE.txt
+          gh release upload discdb-index --repo "$REPO" --clobber discdb-index.json.gz.sig
           gh release upload discdb-index --repo "$REPO" --clobber discdb-index.json.gz.sha256
           echo "Published the index of TheDiscDB ${SOURCE}."

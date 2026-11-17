@@ -5,9 +5,18 @@
 <h1>Settings</h1>
 {{if .Error}}<p class="alert" role="alert">{{.Error}}</p>{{end}}
 {{if .Ignored}}<p class="saved" role="status">Saved. MakeMKV's default selection is on, so the ticked languages were not saved. Choose "Only the languages chosen below" to use them.</p>
-{{else if .Saved}}<p class="saved" role="status">Saved. Language changes apply from the next rip.</p>{{end}}
+{{else if .Saved}}<p class="saved" role="status">Saved. Auto-import changes apply from the next disc, language changes from the next rip.</p>{{end}}
 
 <form method="post" action="/settings" class="panel settings">
+  <h2>Auto-import</h2>
+  <fieldset>
+    <legend>When Discern is sure of a disc</legend>
+    <p><label><input type="radio" name="auto_import" value="off" {{if eq (print .Settings.AutoImport) "off"}}checked{{end}}> Ask me about every disc</label></p>
+    <p><label><input type="radio" name="auto_import" value="trial" {{if eq (print .Settings.AutoImport) "trial"}}checked{{end}}> Ask me, and record what Discern would have done</label></p>
+    <p><label><input type="radio" name="auto_import" value="on" {{if eq (print .Settings.AutoImport) "on"}}checked{{end}}> Rip and import it without asking</label></p>
+  </fieldset>
+  <p class="muted small">Discern is sure only of a disc TheDiscDB knows, whose own name finds the same movie, with nothing in doubt, and that Radarr doesn't have yet. Every other disc waits for you. Try the second choice first: the dashboard then shows how often you chose what Discern would have.</p>
+
   <h2>When a disc is done</h2>
   <p><label><input type="checkbox" name="eject" value="on" {{if .Settings.Eject}}checked{{end}}> Open the tray</label></p>
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/danvanton/discern/internal/settings"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -59,6 +60,61 @@ func TestSelectUsesTheIndexInUse(t *testing.T) {
 	sel, err = s.Select(ctx, j)
 	if err != nil || sel.Confidence != jobs.High || !slices.Equal(sel.Titles, []int{29}) || sel.Auto {
 		t.Errorf("with the index: %s %v auto %v, %v", sel.Confidence, sel.Titles, sel.Auto, err)
+	}
+}
+
+// Auto-import, by mode (decisions D60-D63): off changes nothing; a sure
+// choice is Auto when on and Trial on trial; Radarr having the movie, or
+// any doubt (no movie from the name, settings or Radarr that can't be
+// read), leaves the job waiting with the reason.
+func TestSelectAppliesAutoImport(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "testdata", "makemkv", "scan-star-trek-iii-uhd.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d makemkv.Disc
+	if err := json.Unmarshal(b, &d); err != nil {
+		t.Fatal(err)
+	}
+	ix, _, err := discdb.Build(filepath.Join("..", "..", "testdata", "discdb"), "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	spock := &jobs.Movie{TMDbID: 157, Title: "Star Trek III: The Search for Spock", Year: 1984}
+	notHad := func(context.Context, int) (bool, error) { return false, nil }
+	for _, c := range []struct {
+		name        string
+		mode        settings.AutoImport
+		modeErr     error
+		movie       *jobs.Movie
+		has         func(context.Context, int) (bool, error)
+		auto, trial bool
+		wait        string
+	}{
+		{name: "off", mode: settings.AutoOff, movie: spock, has: notHad},
+		{name: "on", mode: settings.AutoOn, movie: spock, has: notHad, auto: true},
+		{name: "trial", mode: settings.AutoTrial, movie: spock, has: notHad, trial: true},
+		{name: "in Radarr", mode: settings.AutoOn, movie: spock, wait: "Radarr already has Star Trek III: The Search for Spock (1984)",
+			has: func(context.Context, int) (bool, error) { return true, nil }},
+		{name: "Radarr down", mode: settings.AutoOn, movie: spock, wait: "Radarr couldn't be asked",
+			has: func(context.Context, int) (bool, error) { return false, errors.New("connection refused") }},
+		{name: "no Radarr", mode: settings.AutoOn, movie: spock, wait: "Radarr can't be asked"},
+		{name: "no movie from the name", mode: settings.AutoOn, has: notHad, wait: "found no movie"},
+		{name: "settings unreadable", modeErr: errors.New("bad row"), movie: spock, has: notHad, wait: "can't be read (bad row)"},
+		{name: "unknown mode", mode: "always", movie: spock, has: notHad, wait: "can't be read (auto-import \"always\" isn't off, trial or on)"},
+	} {
+		s := &Steps{
+			Index:      func() *discdb.Index { return ix },
+			AutoImport: func(context.Context) (settings.AutoImport, error) { return c.mode, c.modeErr },
+			HasMovie:   c.has,
+		}
+		sel, err := s.Select(ctx, &jobs.Job{Disc: &d, Movie: c.movie})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sel.Auto != c.auto || sel.Trial != c.trial || !strings.Contains(sel.Wait, c.wait) || (c.wait == "") != (sel.Wait == "") {
+			t.Errorf("%s: auto %v, trial %v, wait %q", c.name, sel.Auto, sel.Trial, sel.Wait)
+		}
 	}
 }
 

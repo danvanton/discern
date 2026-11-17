@@ -59,4 +59,6 @@
   {{range .Checks}}<li class="{{if .OK}}ok{{else}}bad{{end}}"><strong>{{.Name}}</strong> {{if .OK}}✓{{else}}✗{{end}} <span class="muted small">{{.Detail}}</span></li>{{end}}
 </ul>
 <p class="muted small">{{with .Index}}TheDiscDB: {{len .Discs}} discs known, from {{date .Built}}.{{else}}TheDiscDB: not downloaded yet. Discern works without it, and fetches it once a day.{{end}}</p>
+<p class="muted small">{{if eq (print .Auto) "on"}}Auto-import: on. Known discs are ripped without asking.{{else if eq (print .Auto) "trial"}}Auto-import: on trial. Every disc waits for you.{{else if .Auto}}Auto-import: off.{{end}}
+{{with .Trial}}{{if .Total}}On trial you chose what Discern would have on {{.Agreed}} of {{.Total}} {{if eq .Total 1}}disc{{else}}discs{{end}}{{with $.Differed}}; you chose differently on {{range $i, $id := .}}{{if $i}}, {{end}}<a href="/jobs/{{$id}}">job {{$id}}</a>{{end}}{{with $.More}} and {{.}} older{{end}}{{end}}.{{end}}{{end}}</p>
 {{end}}

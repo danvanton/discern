@@ -3,6 +3,7 @@ package discdb
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -30,16 +31,22 @@ const (
 	maxChecksum = 1 << 10
 )
 
-// fileName is the index's name in the catalog's folder.
-const fileName = "index.json.gz"
+// The index's name in the catalog's folder, and its signature's.
+const (
+	fileName = "index.json.gz"
+	sigName  = fileName + ".sig"
+)
 
 // Catalog is the index Discern uses: the last good copy, kept on disk in
 // Dir and refreshed from URL. A download is used only when its SHA-256
-// matches the published one and its contents pass Read's checks; anything
-// else leaves the last good index in place. Offline, it uses what it has.
+// matches the published one, its signature verifies with Key (decision
+// D59), and its contents pass Read's checks; anything else leaves the last
+// good index in place. Offline, it uses what it has. The saved copy's
+// signature is checked again at every start.
 type Catalog struct {
-	URL    string // the index; URL + ".sha256" is its checksum
+	URL    string // the index; URL + ".sha256" is its checksum, URL + ".sig" its signature
 	Dir    string
+	Key    ed25519.PublicKey // the key the index must be signed with
 	Client *http.Client
 	Log    *slog.Logger
 
@@ -50,9 +57,10 @@ type Catalog struct {
 	lastErr string // the last refresh's error, so a repeat isn't logged as loudly
 }
 
-// NewCatalog returns a catalog that downloads with a time limit.
+// NewCatalog returns a catalog that downloads with a time limit and trusts
+// only indexes signed with Discern's own key (PublicKey).
 func NewCatalog(url, dir string, log *slog.Logger) *Catalog {
-	return &Catalog{URL: url, Dir: dir, Client: &http.Client{Timeout: 5 * time.Minute}, Log: log}
+	return &Catalog{URL: url, Dir: dir, Key: PublicKey, Client: &http.Client{Timeout: 5 * time.Minute}, Log: log}
 }
 
 // Index is the index in use, or nil before one was loaded.
@@ -62,7 +70,9 @@ func (c *Catalog) Index() *Index {
 	return c.ix
 }
 
-// LoadLocal reads the copy kept on disk. Having none yet is not an error.
+// LoadLocal reads the copy kept on disk, and checks its signature. Having
+// none yet is not an error; a copy without a signature (saved before
+// v0.2.2) is, and a fresh one is downloaded.
 func (c *Catalog) LoadLocal() error {
 	b, err := os.ReadFile(filepath.Join(c.Dir, fileName))
 	if errors.Is(err, os.ErrNotExist) {
@@ -70,6 +80,18 @@ func (c *Catalog) LoadLocal() error {
 	}
 	if err != nil {
 		return err
+	}
+	sig, err := os.ReadFile(filepath.Join(c.Dir, sigName))
+	if errors.Is(err, os.ErrNotExist) {
+		return errors.New("the saved disc index has no signature")
+	}
+	if err != nil {
+		return err
+	}
+	// A crash between saving the signature and the index leaves a pair
+	// that doesn't match; the next refresh downloads both again.
+	if err := Verify(c.Key, b, sig); err != nil {
+		return errors.New("the saved disc index doesn't match its saved signature (an update was interrupted, or a file changed)")
 	}
 	ix, err := Read(bytes.NewReader(b))
 	if err != nil {
@@ -108,6 +130,14 @@ func (c *Catalog) Refresh(ctx context.Context) error {
 	if got := sha(b); got != want {
 		return fmt.Errorf("the downloaded disc index's SHA-256 is %s, the published one %s", got, want)
 	}
+	sig, err := c.get(ctx, c.URL+".sig", maxSignature)
+	if err != nil {
+		return fmt.Errorf("the disc index's signature: %w", err)
+	}
+	// Verify before parse: an unsigned index is never read.
+	if err := Verify(c.Key, b, sig); err != nil {
+		return err
+	}
 	ix, err := Read(bytes.NewReader(b))
 	if err != nil {
 		return err
@@ -118,7 +148,12 @@ func (c *Catalog) Refresh(ctx context.Context) error {
 		return fmt.Errorf("the published disc index (TheDiscDB of %s) is older than the one in use (%s); keeping it",
 			ix.Built.Format(time.RFC3339), cur.Built.Format(time.RFC3339))
 	}
-	if err := save(c.Dir, b); err != nil {
+	// The signature first: a crash between the two leaves a pair that
+	// doesn't verify, so the next start downloads the index again.
+	if err := save(c.Dir, sigName, sig); err != nil {
+		return err
+	}
+	if err := save(c.Dir, fileName, b); err != nil {
 		return err
 	}
 	c.use(ix, want)
@@ -200,8 +235,8 @@ func (c *Catalog) get(ctx context.Context, url string, limit int64) ([]byte, err
 	return b, nil
 }
 
-// save writes the index whole or not at all.
-func save(dir string, b []byte) error {
+// save writes a file whole or not at all.
+func save(dir, name string, b []byte) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -217,7 +252,7 @@ func save(dir string, b []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), filepath.Join(dir, fileName))
+	return os.Rename(tmp.Name(), filepath.Join(dir, name))
 }
 
 func sha(b []byte) string {

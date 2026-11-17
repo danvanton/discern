@@ -119,6 +119,17 @@ func (r *Radarr) Identify(ctx context.Context, j *jobs.Job) (*jobs.Movie, error)
 	return nil, failed
 }
 
+// HasFile reports whether Radarr's library has a file for the movie with
+// this TMDb id. Auto-import asks before ripping (decision D61): Import
+// would refuse to replace the file anyway.
+func (r *Radarr) HasFile(ctx context.Context, tmdbID int) (bool, error) {
+	m, err := r.client.MovieByTMDb(ctx, tmdbID)
+	if err != nil {
+		return false, err
+	}
+	return m != nil && m.HasFile, nil
+}
+
 // pickMovie takes the first result with a TMDb id whose title fits term, or
 // the first such result from year when there is one.
 func pickMovie(results []radarr.Movie, term string, year int) *jobs.Movie {

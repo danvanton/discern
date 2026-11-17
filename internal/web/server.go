@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/danvanton/discern/internal/app"
@@ -66,6 +67,8 @@ type Backend interface {
 	Diagnostics(name string) (dir string, ok bool)
 	// DiscIndex is TheDiscDB's index in use, or nil (D38).
 	DiscIndex() *discdb.Index
+	// TrialTally is how auto-import's trial has gone (D62).
+	TrialTally(ctx context.Context) (jobs.TrialTally, error)
 }
 
 // Options configures the server.
@@ -82,6 +85,8 @@ type server struct {
 	pages  map[string]*template.Template
 	log    *slog.Logger
 	guards *loginGuard
+
+	trialWarned atomic.Bool // the trial tally's read failure was logged as a warning
 }
 
 // New returns the UI's handler.
@@ -491,14 +496,42 @@ func (s *server) poster(w http.ResponseWriter, r *http.Request) {
 }
 
 // healthData is the dashboard's System list: the checks /readyz reports,
-// and TheDiscDB's index, which Discern works without, so it isn't one.
+// and TheDiscDB's index, which Discern works without, so it isn't one; then
+// the auto-import mode and its trial's tally (D62), when they can be read.
 type healthData struct {
 	Checks []app.Check
 	Index  *discdb.Index
+	Auto   settings.AutoImport
+	Trial  jobs.TrialTally
+	// Differed are the newest jobs where the user chose differently, at
+	// most maxDiffered; More counts the rest.
+	Differed []int64
+	More     int
 }
 
+// maxDiffered is how many differing trial jobs the System list links.
+const maxDiffered = 5
+
 func (s *server) healthFragment(w http.ResponseWriter, r *http.Request) {
-	s.render(w, http.StatusOK, "dashboard.html", "health", healthData{Checks: s.b.Health(r.Context()), Index: s.b.DiscIndex()})
+	ctx := r.Context()
+	d := healthData{Checks: s.b.Health(ctx), Index: s.b.DiscIndex()}
+	if st, err := s.b.Settings(ctx); err == nil {
+		d.Auto = st.AutoImport
+	}
+	if t, err := s.b.TrialTally(ctx); err == nil {
+		d.Trial, d.Differed = t, t.Differed
+		if len(d.Differed) > maxDiffered {
+			d.Differed, d.More = d.Differed[:maxDiffered], len(d.Differed)-maxDiffered
+		}
+		s.trialWarned.Store(false)
+	} else if s.trialWarned.CompareAndSwap(false, true) {
+		// The fragment reloads every minute: a lasting failure is a
+		// warning once, then debug.
+		s.log.Warn("reading the auto-import trial", "err", err)
+	} else {
+		s.log.Debug("reading the auto-import trial", "err", err)
+	}
+	s.render(w, http.StatusOK, "dashboard.html", "health", d)
 }
 
 // Actions. Each one answers with a redirect (post, redirect, get), so the
@@ -701,7 +734,7 @@ func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		ForcedOnly: f.Get("forced_only") == "on",
 		Commentary: f.Get("commentary") == "on",
 	}
-	st := settings.Settings{Eject: f.Get("eject") == "on"}
+	st := settings.Settings{Eject: f.Get("eject") == "on", AutoImport: settings.AutoImport(f.Get("auto_import"))}
 	if f.Get("languages") == "chosen" {
 		st.Languages = langs
 	}
@@ -723,6 +756,9 @@ func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
 // rejected form keeps its boxes; otherwise the saved languages are shown.
 func (s *server) showSettings(w http.ResponseWriter, status int, d settingsData, form *settings.Languages) {
 	d.Version, d.Choices = s.opt.Version, lang.All
+	if d.Settings.AutoImport.Validate() != nil {
+		d.Settings.AutoImport = settings.AutoOff // unset, or unknown: off
+	}
 	l := form
 	if l == nil {
 		l = d.Settings.Languages

@@ -11,7 +11,7 @@
    - `secrets/radarr_api_key`
    - `secrets/discern_password` (at least 12 characters)
 
-Once a day Discern downloads TheDiscDB's disc data, a few MB, from Discern's own GitHub release `discdb-index` (built daily from [TheDiscDB](https://github.com/TheDiscDb/data), MIT licence), to recognise known discs. It checks the published SHA-256 and keeps the last good copy, so it also works offline; `DISCERN_DISCDB_URL=off` turns the download off.
+Once a day Discern downloads TheDiscDB's disc data, a few MB, from Discern's own GitHub release `discdb-index` (built daily from [TheDiscDB](https://github.com/TheDiscDb/data), MIT licence), to recognise known discs. It checks the published SHA-256 and the index's signature (made with Discern's own key; an unsigned index is never used), and keeps the last good copy, so it also works offline; `DISCERN_DISCDB_URL=off` turns the download off.
 
 Discern also fetches each movie's poster from TMDb's image server, `image.tmdb.org`, at the address Radarr's lookup gives (nothing else is fetched from there). Without internet access the pages simply show no posters.
 

@@ -4,8 +4,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
+	"github.com/danvanton/discern/internal/discdb"
 	"io"
 	"log/slog"
 	"net/http"
@@ -43,6 +46,7 @@ CINFO:32,0,"MATRIX_THE"
 TINFO:0,9,0,"2:16:17"
 TINFO:0,11,0,"1048576"
 TINFO:0,16,0,"00800.mpls"
+TINFO:0,26,0,"1-3"
 TINFO:0,27,0,"The Matrix_t00.mkv"
 SINFO:0,0,1,6201,"Video"
 SINFO:0,0,19,0,"3840x2160"
@@ -53,6 +57,7 @@ SINFO:0,2,3,0,"fre"
 TINFO:1,9,0,"0:05:00"
 TINFO:1,11,0,"65536"
 TINFO:1,16,0,"00801.mpls"
+TINFO:1,26,0,"4"
 TINFO:1,27,0,"The Matrix_t01.mkv"
 `
 
@@ -110,6 +115,7 @@ func newWorld(t *testing.T, ripDelay int, db string) *world {
 	a.Drives, a.MakeMKVCon = []string{"/dev/sr0"}, exe
 	a.MakeMKVSettings = filepath.Join(dir, "settings.conf")
 	jobSteps.BeforeRip = a.ApplyLanguages
+	a.ConnectSelect(jobSteps)
 	return &world{app: a, store: st, radarr: fr, staging: staging, db: db, cancel: cancel}
 }
 
@@ -554,5 +560,73 @@ func TestOwnAudioSkipsOddCodes(t *testing.T) {
 	}
 	if _, err := makemkv.SelectionRule(append([]string{"eng"}, own...), nil, false, false); err != nil {
 		t.Errorf("the rule for this title is refused: %v", err)
+	}
+}
+
+// knownMatrix gives the app a TheDiscDB index that knows the world's disc
+// as The Matrix, signed with a test key the catalog trusts.
+func knownMatrix(t *testing.T, a *App) {
+	t.Helper()
+	d, err := makemkv.ParseInfo(strings.NewReader(scan))
+	if err != nil {
+		t.Fatal(err)
+	}
+	known := discdb.Disc{Movie: discdb.Movie{TMDbID: 603, Title: "The Matrix", Year: 1999}, Release: "test", Name: "The Matrix", Format: "UHD"}
+	for _, ti := range d.Titles {
+		kind := "Extra"
+		if ti.Index == 0 {
+			kind = discdb.MainMovie
+		}
+		known.Titles = append(known.Titles, discdb.Title{Index: ti.Index, File: ti.SourceFile, Segments: ti.SegmentMap,
+			Seconds: int(ti.Duration / time.Second), Size: ti.SizeBytes, Type: kind, Name: "The Matrix"})
+	}
+	var b bytes.Buffer
+	if err := (&discdb.Index{Version: 1, Built: time.Now(), Source: "test", Discs: []discdb.Disc{known}}).Write(&b); err != nil {
+		t.Fatal(err)
+	}
+	seed := bytes.Repeat([]byte{7}, ed25519.SeedSize)
+	sig, _ := discdb.Sign(seed, b.Bytes())
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "index.json.gz"), b.Bytes(), 0o644)
+	os.WriteFile(filepath.Join(dir, "index.json.gz.sig"), sig, 0o644)
+	c := discdb.NewCatalog("", dir, nil)
+	c.Key = ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
+	if err := c.LoadLocal(); err != nil || c.Index() == nil {
+		t.Fatalf("the test index didn't load: %v", err)
+	}
+	a.Catalog = c
+}
+
+// Auto-import through the app's own wiring (decisions D60-D63): with a
+// disc TheDiscDB knows, auto-import on goes from tray to Radarr without an
+// approval; on trial, or once Radarr has the movie, the disc waits, saying
+// why.
+func TestAutoImportEndToEnd(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t, 0, "")
+	knownMatrix(t, w.app)
+	if err := w.app.SaveSettings(ctx, settings.Settings{AutoImport: settings.AutoTrial}); err != nil {
+		t.Fatal(err)
+	}
+	trial, _ := w.app.DiscInserted(ctx, "/dev/sr0")
+	got := w.waitFor(t, trial.ID, jobs.NeedsYou)
+	if got.Selection == nil || !got.Selection.Trial || got.Selection.Auto {
+		t.Fatalf("on trial: %+v", got.Selection)
+	}
+	w.app.Cancel(ctx, trial.ID)
+
+	if err := w.app.SaveSettings(ctx, settings.Settings{AutoImport: settings.AutoOn}); err != nil {
+		t.Fatal(err)
+	}
+	on, _ := w.app.DiscInserted(ctx, "/dev/sr0")
+	got = w.waitFor(t, on.ID, jobs.Done)
+	if !strings.HasPrefix(got.Note, "ripped without asking (auto-import)") || len(w.radarr.Imports()) != 1 {
+		t.Errorf("on: note %q, %d imports", got.Note, len(w.radarr.Imports()))
+	}
+
+	again, _ := w.app.DiscInserted(ctx, "/dev/sr0")
+	got = w.waitFor(t, again.ID, jobs.NeedsYou)
+	if got.Selection == nil || got.Selection.Wait != "Radarr already has The Matrix (1999)" {
+		t.Errorf("Radarr has it: %+v", got.Selection)
 	}
 }

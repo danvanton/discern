@@ -16,6 +16,7 @@ import (
 	"github.com/danvanton/discern/internal/importer"
 	"github.com/danvanton/discern/internal/jobs"
 	"github.com/danvanton/discern/internal/makemkv"
+	"github.com/danvanton/discern/internal/settings"
 )
 
 // Steps runs each job step against MakeMKV and Radarr.
@@ -58,6 +59,12 @@ type Steps struct {
 	// Index, if set, returns TheDiscDB's index in use, or nil when there is
 	// none yet (App.DiscIndex). Select matches the disc against it.
 	Index func() *discdb.Index
+	// AutoImport, if set, returns the Settings page's auto-import mode
+	// (decision D63). Unset, every disc waits for the user.
+	AutoImport func(ctx context.Context) (settings.AutoImport, error)
+	// HasMovie reports whether Radarr already has a file for the movie
+	// (decision D61). New sets it to Radarr's; tests replace it.
+	HasMovie func(ctx context.Context, tmdbID int) (bool, error)
 
 	info func(ctx context.Context, drive string) (*makemkv.Disc, error) // runner.Info; tests replace it
 
@@ -68,11 +75,15 @@ type Steps struct {
 var _ jobs.Steps = (*Steps)(nil)
 
 func New(runner *makemkv.Runner, radarr *importer.Radarr) *Steps {
-	return &Steps{
+	s := &Steps{
 		runner: runner, radarr: radarr, scanned: map[int64]uint64{},
 		ScanAttempts: 3, ScanRetryDelay: 30 * time.Second,
 		info: runner.Info,
 	}
+	if radarr != nil {
+		s.HasMovie = radarr.HasFile
+	}
+	return s
 }
 
 // scanDisc scans the drive, retrying an incomplete scan.

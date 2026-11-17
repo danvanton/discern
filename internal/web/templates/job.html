@@ -179,6 +179,7 @@
   <div class="decision">
     <p class="small"><span class="badge {{.Class}}">{{.Badge}}</span>{{with .Summary}} {{sentence .}}{{end}}</p>
     {{with .Holds}}<ul class="holds">{{range .}}<li>{{sentence .}}</li>{{end}}</ul>{{end}}
+    {{with .Auto}}<p class="small">{{.}}</p>{{end}}
     {{with .Reasons}}<details class="group"><summary>How Discern chose</summary>
       <ul class="reasons muted small">{{range .}}<li>{{sentence .}}</li>{{end}}</ul>
     </details>{{end}}

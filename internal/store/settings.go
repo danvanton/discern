@@ -28,6 +28,8 @@ func (s *Store) Settings(ctx context.Context) (settings.Settings, error) {
 			target = &st.Eject
 		case "languages":
 			target = &st.Languages
+		case "auto_import":
+			target = &st.AutoImport
 		default:
 			continue
 		}
@@ -36,6 +38,9 @@ func (s *Store) Settings(ctx context.Context) (settings.Settings, error) {
 			return settings.Defaults(), fmt.Errorf("setting %s: %w", key, err)
 		}
 	}
+	// An auto-import mode this version doesn't know (from a newer Discern)
+	// is returned as it is: the select step refuses it, so only auto-import
+	// fails closed, not the languages every rip needs.
 	return st, rows.Err()
 }
 
@@ -47,7 +52,14 @@ func (s *Store) SaveSettings(ctx context.Context, st settings.Settings) error {
 		return err
 	}
 	defer tx.Rollback()
-	values := map[string]any{"eject": st.Eject}
+	// Unset is off: a caller that doesn't set it turns nothing on.
+	if st.AutoImport == "" {
+		st.AutoImport = settings.AutoOff
+	}
+	if err := st.AutoImport.Validate(); err != nil {
+		return err
+	}
+	values := map[string]any{"eject": st.Eject, "auto_import": st.AutoImport}
 	if st.Languages != nil {
 		values["languages"] = st.Languages
 	} else if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE key = 'languages'`); err != nil {

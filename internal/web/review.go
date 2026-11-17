@@ -53,6 +53,9 @@ type decisionView struct {
 	Summary string // the decisive reason, when nothing holds it
 	Holds   []string
 	Reasons []string
+	// Auto is what auto-import made of the disc, when it is on or on
+	// trial (decisions D60-D62).
+	Auto string
 }
 
 func viewDecision(sel *jobs.Selection) *decisionView {
@@ -70,6 +73,12 @@ func viewDecision(sel *jobs.Selection) *decisionView {
 	}
 	if len(sel.Holds) == 0 {
 		v.Summary = sel.Reason
+	}
+	switch {
+	case sel.Trial:
+		v.Auto = "Trial: Discern would have ripped the ticked title on its own."
+	case sel.Wait != "":
+		v.Auto = "Not ripped on its own: " + sel.Wait + "."
 	}
 	return v
 }

@@ -91,10 +91,30 @@ type Selection struct {
 	// Movie is the movie TheDiscDB names for the disc, when it knows the
 	// disc. The engine uses it when Identify found none (decision D47).
 	Movie *Movie `json:"movie,omitempty"`
-	// Auto is true when the selector is confident enough to rip without
-	// asking. It is always false until auto-import (decision D40).
+	// Auto is true when auto-import is on and the choice is sure enough to
+	// rip without asking (decisions D60, D61).
 	Auto bool `json:"auto,omitempty"`
+	// Trial is true when auto-import is on trial and would have ripped this
+	// disc without asking (decision D62).
+	Trial bool `json:"trial,omitempty"`
+	// Agreed records, for a trial, whether the user approved what Discern
+	// would have done: the same titles and the same movie. Nil until the
+	// user approves.
+	Agreed *bool `json:"agreed,omitempty"`
+	// Wait says why auto-import, on or on trial, didn't act on this disc.
+	Wait string `json:"wait,omitempty"`
 }
+
+// TrialTally is how auto-import's trial has gone (decision D62): of the
+// discs it would have ripped on its own, how many the user approved the
+// same way, and which jobs they approved otherwise.
+type TrialTally struct {
+	Agreed   int
+	Differed []int64 // newest first
+}
+
+// Total is the number of trial discs the user has answered.
+func (t TrialTally) Total() int { return t.Agreed + len(t.Differed) }
 
 // Confidence is how strong the selector's evidence is (decision D44).
 type Confidence string

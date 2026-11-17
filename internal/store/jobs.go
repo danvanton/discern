@@ -120,6 +120,34 @@ func (s *Store) RecentJobs(ctx context.Context, limit int) ([]*jobs.Job, error) 
 // Ping checks the database answers, for the health check.
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 
+// TrialTally counts the trial discs the user has approved (decision D62):
+// those approved as Discern would have done, and the jobs approved
+// otherwise. It reads the saved selections' "trial" and "agreed" fields.
+func (s *Store) TrialTally(ctx context.Context) (jobs.TrialTally, error) {
+	var t jobs.TrialTally
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, json_extract(selection, '$.agreed') FROM jobs
+		WHERE json_extract(selection, '$.trial') = 1 AND json_extract(selection, '$.agreed') IS NOT NULL
+		ORDER BY id DESC`)
+	if err != nil {
+		return t, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var agreed bool
+		if err := rows.Scan(&id, &agreed); err != nil {
+			return t, err
+		}
+		if agreed {
+			t.Agreed++
+		} else {
+			t.Differed = append(t.Differed, id)
+		}
+	}
+	return t, rows.Err()
+}
+
 func (s *Store) Move(ctx context.Context, j *jobs.Job, to jobs.State, note string) error {
 	disc, err := jsonOrNull(j.Disc)
 	if err != nil {

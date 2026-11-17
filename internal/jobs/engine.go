@@ -151,7 +151,15 @@ func (e *Engine) step(ctx context.Context, j *Job) error {
 			j.Movie = sel.Movie
 		}
 		if sel.Auto && len(sel.Titles) > 0 {
-			return e.move(ctx, j, Ripping, sel.Reason)
+			if j.Movie == nil {
+				// selector.Unsure needs a movie, so this shouldn't happen;
+				// if it does, the job says why it waits.
+				j.Note = "not ripped on its own: there is no movie to import it as"
+				return e.move(ctx, j, NeedsYou, j.Note)
+			}
+			// The note says so on the job's page, not only in its history.
+			j.Note = "ripped without asking (auto-import): " + sel.Reason
+			return e.move(ctx, j, Ripping, j.Note)
 		}
 		return e.move(ctx, j, NeedsYou, sel.Reason)
 
@@ -267,6 +275,10 @@ func (e *Engine) Approve(ctx context.Context, id int64, titles []int, movie *Mov
 	}
 	if j.Movie == nil {
 		return ErrNoMovie
+	}
+	if sel := j.Selection; sel != nil && sel.Trial {
+		agreed := sel.Movie != nil && sel.Movie.TMDbID == j.Movie.TMDbID && sameTitles(sel.Titles, titles)
+		sel.Agreed = &agreed
 	}
 	j.Titles, j.Note, j.Languages = slices.Clone(titles), "", langs
 	return e.move(ctx, j, Ripping, fmt.Sprintf("approved titles %v", titles))
@@ -425,6 +437,14 @@ func (e *Engine) removeStaging(id int64) {
 	if err := os.RemoveAll(e.StagingDir(id)); err != nil {
 		e.log.Warn("removing staging folder failed", "job", id, "err", err)
 	}
+}
+
+// sameTitles reports whether a and b hold the same titles, in any order.
+func sameTitles(a, b []int) bool {
+	x, y := slices.Clone(a), slices.Clone(b)
+	slices.Sort(x)
+	slices.Sort(y)
+	return slices.Equal(x, y)
 }
 
 // checkTitles makes sure every chosen title exists on the scanned disc.

@@ -570,6 +570,28 @@ func (a *App) knows(drive string) bool {
 	return false
 }
 
+// ConnectSelect gives the select step what it needs from the app: the
+// selector matches each disc against TheDiscDB's index in use (a.Catalog;
+// with none yet, it decides from the scan), and auto-import reads its mode
+// at every selection, so a change on the Settings page applies from the
+// next disc (decisions D60-D63).
+func (a *App) ConnectSelect(s *steps.Steps) {
+	s.Index = a.DiscIndex
+	s.AutoImport = a.AutoImportMode
+}
+
+// AutoImportMode is the Settings page's auto-import mode, for the select
+// step (Steps.AutoImport).
+func (a *App) AutoImportMode(ctx context.Context) (settings.AutoImport, error) {
+	st, err := a.store.Settings(ctx)
+	return st.AutoImport, err
+}
+
+// TrialTally is how auto-import's trial has gone, for the dashboard.
+func (a *App) TrialTally(ctx context.Context) (jobs.TrialTally, error) {
+	return a.store.TrialTally(ctx)
+}
+
 // Settings returns the Settings page's values.
 func (a *App) Settings(ctx context.Context) (settings.Settings, error) { return a.store.Settings(ctx) }
 

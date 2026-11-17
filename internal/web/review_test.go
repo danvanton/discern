@@ -122,3 +122,18 @@ func TestLangChoiceFor(t *testing.T) {
 		t.Errorf("Summary = %q", s)
 	}
 }
+
+// The review page says what auto-import made of the disc: a trial's
+// "would have", or why it didn't act (decisions D60-D62).
+func TestViewDecisionSaysWhatAutoImportDid(t *testing.T) {
+	if v := viewDecision(&jobs.Selection{Confidence: jobs.High}); v.Auto != "" {
+		t.Errorf("auto-import off: %q", v.Auto)
+	}
+	if v := viewDecision(&jobs.Selection{Confidence: jobs.High, Trial: true}); !strings.HasPrefix(v.Auto, "Trial: Discern would have ripped") {
+		t.Errorf("trial: %q", v.Auto)
+	}
+	v := viewDecision(&jobs.Selection{Confidence: jobs.High, Wait: "Radarr already has Alien (1979)"})
+	if v.Auto != "Not ripped on its own: Radarr already has Alien (1979)." {
+		t.Errorf("wait: %q", v.Auto)
+	}
+}

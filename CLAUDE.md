@@ -2,7 +2,7 @@
 
 Discern watches optical drives, works out which titles on a disc are the movie, rips them with MakeMKV (`makemkvcon`, run as a subprocess) and imports them into Radarr. It is written in Go 1.27 and is a single binary with a web UI.
 
-The design, every decision (D1–D58) and the reason for each are in `docs/DESIGN.md`. Read the relevant section before changing a part. When a change alters behaviour the design describes, update the design doc in the same change. New decisions get the next D-number in the decision log (section 17), marked Proposed until the owner accepts them.
+The design, every decision (D1–D69) and the reason for each are in `docs/DESIGN.md`. Read the relevant section before changing a part. When a change alters behaviour the design describes, update the design doc in the same change. New decisions get the next D-number in the decision log (section 17), marked Proposed until the owner accepts them.
 
 ## Layout
 
@@ -20,8 +20,8 @@ The design, every decision (D1–D58) and the reason for each are in `docs/DESIG
 | `internal/steps` | the real `jobs.Steps`: scan, check disc, select (calls `selector`), rip, verify, import |
 | `internal/radarr` | Radarr v3 API client; `radarrtest` is an in-memory fake Radarr |
 | `internal/importer` | Radarr import flow and the staging `PathMap` |
-| `internal/discdb` | TheDiscDB's movie discs as a compact index; matching a scan to a known disc by shape (D39, D46) |
-| `internal/selector` | which titles are the movie: evidence, decoy checks, confidence and holds; a pure function (D43–D49, D52, D53) |
+| `internal/discdb` | TheDiscDB's movie discs as a compact index, signed (D59); matching a scan to a known disc by shape (D39, D46) |
+| `internal/selector` | which titles are the movie: evidence, decoy checks, confidence and holds, and whether auto-import may act; pure functions (D43–D49, D52, D53, D60) |
 | `internal/identify` | disc label cleaning for the movie lookup |
 | `internal/drive` | Linux tray status and eject (ioctls), the watcher and the tray-change tracker |
 | `internal/app` | runtime glue: starts and resumes jobs, ejects, health |

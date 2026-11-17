@@ -195,9 +195,9 @@ func run(log *slog.Logger) error {
 	}
 	jobSteps.BeforeRip = a.ApplyLanguages
 	jobSteps.Trimmed = a.LanguagesChosen
-	// The selector matches each disc against TheDiscDB's index in use
-	// (a.Catalog, set below); with none yet, it decides from the scan.
-	jobSteps.Index = a.DiscIndex
+	// The select step: TheDiscDB's index (a.Catalog, set below) and the
+	// auto-import mode.
+	a.ConnectSelect(jobSteps)
 	// Verify reads each rip's tracks with mkvmerge, which the image has.
 	if bin, err := exec.LookPath("mkvmerge"); err == nil {
 		// One read serves both: Verify checks the tracks, and the import

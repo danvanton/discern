@@ -22,7 +22,7 @@ func TestSettingsStartAtTheirDefaults(t *testing.T) {
 func TestSettingsSaveAndReadBack(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openTest(t)
-	want := settings.Settings{Eject: false, Languages: &settings.Languages{
+	want := settings.Settings{Eject: false, AutoImport: settings.AutoOn, Languages: &settings.Languages{
 		Audio: []string{"eng", "fre"}, Subtitles: []string{"eng"}, ForcedOnly: true,
 	}}
 	if err := s.SaveSettings(ctx, want); err != nil {
@@ -70,5 +70,37 @@ func TestSeedEjectOnlyWhenNeverSaved(t *testing.T) {
 	}
 	if st, _ := s.Settings(ctx); !st.Eject {
 		t.Error("the saved eject setting was overwritten")
+	}
+}
+
+// Auto-import saves and reads back; unset is saved as off; a mode this
+// version doesn't know is refused on saving, and read back as it is,
+// leaving the other settings readable (the select step refuses it).
+func TestAutoImportSetting(t *testing.T) {
+	s, _ := openTest(t)
+	ctx := context.Background()
+	if st, _ := s.Settings(ctx); st.AutoImport != settings.AutoOff {
+		t.Errorf("default auto-import %q; want off", st.AutoImport)
+	}
+	if err := s.SaveSettings(ctx, settings.Settings{Eject: true, AutoImport: settings.AutoTrial}); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := s.Settings(ctx); err != nil || st.AutoImport != settings.AutoTrial {
+		t.Errorf("auto-import %q, %v; want trial", st.AutoImport, err)
+	}
+	if err := s.SaveSettings(ctx, settings.Settings{Eject: true}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.Settings(ctx); st.AutoImport != settings.AutoOff {
+		t.Errorf("unset auto-import read back as %q; want off", st.AutoImport)
+	}
+	if err := s.SaveSettings(ctx, settings.Settings{AutoImport: "always"}); err == nil {
+		t.Error("an unknown mode was saved")
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE settings SET value = '"always"' WHERE key = 'auto_import'`); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := s.Settings(ctx); err != nil || st.AutoImport != "always" || !st.Eject {
+		t.Errorf("an unknown saved mode: %+v, %v; want it as saved, and eject still read", st, err)
 	}
 }

@@ -40,6 +40,7 @@ type fakeBackend struct {
 	health      []app.Check
 	failNext    error
 	settings    *settings.Settings
+	trial       jobs.TrialTally
 	settingsErr error
 	posters     map[int]string // TMDb id → cached file
 	live        map[string]makemkv.Live
@@ -149,6 +150,11 @@ func (f *fakeBackend) SaveSettings(_ context.Context, st settings.Settings) erro
 			return err
 		}
 	}
+	if st.AutoImport != "" {
+		if err := st.AutoImport.Validate(); err != nil {
+			return err
+		}
+	}
 	f.settings = &st
 	return nil
 }
@@ -166,6 +172,8 @@ func (f *fakeBackend) Live(d string) (makemkv.Live, bool) {
 func (f *fakeBackend) DriveState(d string) drive.State { return f.trays[d] }
 
 func (f *fakeBackend) DiscIndex() *discdb.Index { return f.discIndex }
+
+func (f *fakeBackend) TrialTally(context.Context) (jobs.TrialTally, error) { return f.trial, nil }
 
 func (f *fakeBackend) Diagnostics(name string) (string, bool) {
 	dir, ok := f.bundles[name]
@@ -891,6 +899,36 @@ func TestHealthShowsTheDiscIndex(t *testing.T) {
 	}
 }
 
+// The System list says the auto-import mode and how its trial went, with
+// links to the jobs where the user chose differently (decision D62).
+func TestHealthShowsAutoImport(t *testing.T) {
+	b := newBackend()
+	srv := newServer(t, b)
+	if _, body := get(t, srv, "/fragments/health"); !strings.Contains(body, "Auto-import: off.") {
+		t.Error("auto-import off isn't said")
+	}
+	b.settings = &settings.Settings{AutoImport: settings.AutoTrial}
+	b.trial = jobs.TrialTally{Agreed: 6, Differed: []int64{12, 9}}
+	_, body := get(t, srv, "/fragments/health")
+	for _, want := range []string{"Auto-import: on trial.", "on 6 of 8 discs",
+		`you chose differently on <a href="/jobs/12">job 12</a>, <a href="/jobs/9">job 9</a>.`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("trial: missing %q in %s", want, body)
+		}
+	}
+	// Only the newest five are linked.
+	b.trial = jobs.TrialTally{Differed: []int64{20, 19, 18, 17, 16, 15, 14}}
+	_, body = get(t, srv, "/fragments/health")
+	if !strings.Contains(body, `<a href="/jobs/16">job 16</a> and 2 older.`) || strings.Contains(body, "/jobs/15") {
+		t.Errorf("the differing jobs aren't capped: %s", body)
+	}
+	b.settings = &settings.Settings{AutoImport: settings.AutoOn}
+	b.trial = jobs.TrialTally{Agreed: 1}
+	if _, body := get(t, srv, "/fragments/health"); !strings.Contains(body, "Auto-import: on.") || !strings.Contains(body, "on 1 of 1 disc.") {
+		t.Errorf("on: %s", body)
+	}
+}
+
 func TestRepeatedFailedLoginsAreLockedOut(t *testing.T) {
 	srv := newServer(t, newBackend())
 	try := func(password string) int {
@@ -960,6 +998,21 @@ func TestSettingsPage(t *testing.T) {
 	if resp.StatusCode != 422 || !strings.Contains(body, "at least one audio language") ||
 		!strings.Contains(body, `name="subtitles" value="eng" checked`) {
 		t.Errorf("bad languages: %d; want 422 with the error and the form kept", resp.StatusCode)
+	}
+
+	// Auto-import: off is checked at first; trial saves and shows; an
+	// unknown mode is refused.
+	if _, body := do(t, srv, "GET", "/settings", nil, true, nil); !strings.Contains(body, `name="auto_import" value="off" checked`) {
+		t.Error("auto-import isn't off at first")
+	}
+	if resp, _ := do(t, srv, "POST", "/settings", url.Values{"languages": {"default"}, "auto_import": {"trial"}}, true, same); resp.StatusCode != 303 || b.settings.AutoImport != settings.AutoTrial {
+		t.Errorf("save trial: %d, saved %q", resp.StatusCode, b.settings.AutoImport)
+	}
+	if _, body := do(t, srv, "GET", "/settings", nil, true, nil); !strings.Contains(body, `name="auto_import" value="trial" checked`) {
+		t.Error("the page doesn't show trial as saved")
+	}
+	if resp, _ := do(t, srv, "POST", "/settings", url.Values{"languages": {"default"}, "auto_import": {"always"}}, true, same); resp.StatusCode != 422 || b.settings.AutoImport != settings.AutoTrial {
+		t.Errorf("an unknown mode: %d, saved %q", resp.StatusCode, b.settings.AutoImport)
 	}
 
 	// Back to MakeMKV's default.
