@@ -75,7 +75,7 @@
     {{if .Diagnostics}}<p><a href="/jobs/{{$.Job.ID}}/diagnostics.zip" download>Download the diagnostics (.zip)</a> <span class="muted small">MakeMKV's debug log, its output and the read and write samples, for a bug report. They name the disc and the drive; Discern removes the MakeMKV key, but look before sharing.</span></p>{{end}}
     {{with .Messages}}
     <p class="field">MakeMKV's last messages</p>
-    <ol class="messages">{{range .}}<li{{if .Problem}} class="problem"{{end}}><code>{{.Code}}</code> {{.Text}}</li>
+    <ol class="messages">{{range .}}<li{{if .Problem}} class="problem"{{end}}>{{if .Code}}<code>{{.Code}}</code> {{end}}{{.Text}}</li>
     {{end}}</ol>
     {{end}}
     {{end}}

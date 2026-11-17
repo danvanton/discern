@@ -25,14 +25,28 @@ import (
 // makemkvcon copies the disc, then mkvmerge builds each chosen title's MKV
 // from its playlist, skipping MakeMKV's muxer, which is what stalls.
 
-// Backup copies the disc in j's drive into dir with makemkvcon backup.
+// Backup copies the disc in j's drive into dir with makemkvcon backup. The
+// drive's number comes from the job's scan (decision D72).
 func (s *Steps) Backup(ctx context.Context, j *jobs.Job, dir string, progress func(float64)) error {
+	if j.Disc == nil {
+		return jobs.NotStarted{Err: errors.New("no scan to back up from")}
+	}
+	disc, err := j.Disc.DiscNumber(j.Drive)
+	if err != nil {
+		return jobs.NotStarted{Err: err}
+	}
 	onProgress := func(p makemkv.Progress) {
 		if progress != nil && p.Max > 0 {
 			progress(float64(p.Total) / float64(p.Max))
 		}
 	}
-	if _, err := s.runner.Backup(ctx, j.Drive, dir, onProgress); err != nil {
+	if _, err := s.runner.Backup(ctx, j.Drive, disc, dir, onProgress); err != nil {
+		// A refused drive number stops the run at MakeMKV's drive list,
+		// before the disc is read.
+		var refused *makemkv.RefusedError
+		if errors.As(err, &refused) && !refused.Finished {
+			return jobs.NotStarted{Err: err}
+		}
 		return s.saveDiagnostics(j, err)
 	}
 	return nil

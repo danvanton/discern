@@ -43,8 +43,11 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// A small disc: a 1 MiB main feature (title 0) and an extra (title 1).
-const scan = `TCOUNT:2
+// A small disc: a 1 MiB main feature (title 0) and an extra (title 1), in
+// drive 0 of MakeMKV's drive list.
+const scan = `DRV:0,2,999,12,"BD-RE FAKE DRIVE 1.00","MATRIX_THE","/dev/sr0"
+DRV:1,256,999,0,"","",""
+TCOUNT:2
 CINFO:2,0,"The Matrix"
 CINFO:32,0,"MATRIX_THE"
 TINFO:0,9,0,"2:16:17"

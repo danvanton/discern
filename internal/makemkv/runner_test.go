@@ -455,7 +455,7 @@ func TestBackupHealthy(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "backup")
 	var progress atomic.Int32
 
-	msgs, err := r.Backup(context.Background(), "/dev/sr0", out, func(Progress) { progress.Add(1) })
+	msgs, err := r.Backup(context.Background(), "/dev/sr0", 0, out, func(Progress) { progress.Add(1) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,17 +478,127 @@ func TestBackupStallAndExitError(t *testing.T) {
 		StallMode: fake.StallReading, ReadCounterFile: counter,
 	}}})
 	r.readCounter = counterFileReader(counter)
-	_, err := r.Backup(context.Background(), "/dev/sr0", t.TempDir(), nil)
+	_, err := r.Backup(context.Background(), "/dev/sr0", 0, t.TempDir(), nil)
 	var we *WatchdogError
 	if !errors.As(err, &we) || we.Verdict != Stalled {
 		t.Errorf("a stalled backup: %v", err)
 	}
 
 	r = testRunner(t, fake.Scenario{Backup: fake.Backup{Mkv: fake.Mkv{TotalBytes: 64 << 10, ExitCode: 3}}})
-	_, err = r.Backup(context.Background(), "/dev/sr0", t.TempDir(), nil)
+	_, err = r.Backup(context.Background(), "/dev/sr0", 0, t.TempDir(), nil)
 	var ee *ExitError
 	if !errors.As(err, &ee) || ee.Code != 3 || ee.Op != "backup" {
 		t.Errorf("err = %v, want *ExitError from backup with code 3", err)
+	}
+}
+
+// A backup names its drive by MakeMKV's number ("disc:N"; the fake, like
+// makemkvcon 2.0.0, refuses anything else), and is stopped when the drive
+// list MakeMKV prints at start says that number is another drive now
+// (decision D72).
+func TestBackupChecksTheDriveNumber(t *testing.T) {
+	drives := []string{"/dev/sr1", "/dev/sr0"}
+	small := testRunner(t, fake.Scenario{Backup: fake.Backup{Mkv: fake.Mkv{TotalBytes: 1 * mib}, Drives: drives}})
+	if _, err := small.Backup(context.Background(), "/dev/sr0", 1, t.TempDir(), nil); err != nil {
+		t.Errorf("drive 1 is /dev/sr0: %v", err)
+	}
+
+	// Slow and large, so a backup that wasn't stopped would show.
+	r := testRunner(t, fake.Scenario{Backup: fake.Backup{
+		Mkv: fake.Mkv{TotalBytes: 64 * mib, ChunkDelayMs: 5}, Drives: drives}})
+	out := t.TempDir()
+	_, err := r.Backup(context.Background(), "/dev/sr0", 0, out, nil)
+	var refused *RefusedError
+	if !errors.As(err, &refused) || refused.Finished || len(refused.MakeMKVMessages()) == 0 ||
+		!strings.Contains(err.Error(), "drive numbers changed") {
+		t.Errorf("drive 0 is /dev/sr1: err = %v", err)
+	}
+	if n := dirSize(out); n >= 64*mib {
+		t.Errorf("the backup of the wrong drive ran to the end (%d bytes)", n)
+	}
+
+	_, err = r.Backup(context.Background(), "/dev/sr0", 5, t.TempDir(), nil)
+	if err == nil || !strings.Contains(err.Error(), "drive 5") {
+		t.Errorf("drive 5 is an empty slot: err = %v", err)
+	}
+}
+
+// The check also refuses a run whose output ends without the drive list.
+func TestSameDriveNeedsTheDriveListed(t *testing.T) {
+	c := &driveCheck{device: "/dev/sr0", disc: 0}
+	if err := c.check(Progress{Max: 65536}); err != nil {
+		t.Errorf("progress before the list: %v", err)
+	}
+	if err := c.ended(); err == nil {
+		t.Error("a run that never listed its drive passed")
+	}
+	c = &driveCheck{device: "/dev/sr0", disc: 2}
+	c.check(Drive{Index: 0, Device: "/dev/sr0"})
+	if err := c.check(Message{Code: 5010}); err == nil {
+		t.Error("a drive list without drive 2 passed")
+	}
+}
+
+// MakeMKV prints some errors as plain text, not MSG lines. The real
+// makemkvcon 2.0.0 answered "backup dev:/dev/sr0" (2026-11-17) with this,
+// then exit status 10; the plain line must reach the failure as a message.
+func TestPlainTextErrorsAreKept(t *testing.T) {
+	out := `MSG:1005,0,1,"MakeMKV v2.0.0 linux(x64-release) started","%1 started","MakeMKV v2.0.0 linux(x64-release)"
+PRGT:5018,0,"Scanning CD-ROM devices"
+DRV:0,2,999,12,"BD-RE PIONEER BD-RW   BDR-211M 1.53 MLDL002857WL","THE_WHOLE_BLOODY_AFFAIR_UHD_D1","/dev/sr0"
+DRV:1,256,999,0,"","",""
+Backup source must start with "disc:"
+`
+	l := &robotLog{tail: newRing[string](10)}
+	if err := l.consume(strings.NewReader(out), func(Progress) {}, func() {}); err != nil {
+		t.Fatal(err)
+	}
+	msgs := l.messages()
+	if len(msgs) != 2 || msgs[1].Code != MsgPlainText || !msgs[1].Problem() || msgs[1].Text != `Backup source must start with "disc:"` {
+		t.Fatalf("messages = %+v", msgs)
+	}
+	ee := &ExitError{Op: "backup", Code: 10, Messages: msgs}
+	if got, want := ee.Error(), `makemkvcon backup exited with status 10: "Backup source must start with \"disc:\""`; got != want {
+		t.Errorf("Error() = %s, want %s", got, want)
+	}
+
+	// The note quotes MakeMKV's own last message, not stderr's, and only so
+	// much of it.
+	long := strings.Repeat("x", 5000)
+	ee = &ExitError{Op: "mkv", Code: 2, Messages: []Message{{Code: 1005}, {Code: 5003, Text: long}},
+		Stderr: []Message{{Code: MsgPlainText, Text: "a library warning"}}}
+	if s := ee.Error(); !strings.Contains(s, "MSG 5003") || len(s) > 400 {
+		t.Errorf("Error() = %.100s... (%d bytes)", s, len(s))
+	}
+
+	// What makemkvcon writes to stderr reaches the failure page too: the
+	// fake reports a missing scan file there and exits with status 2. With
+	// nothing on stdout, the note quotes it.
+	r := testRunner(t, fake.Scenario{Info: fake.Info{File: filepath.Join(t.TempDir(), "missing.txt")}})
+	_, err := r.Info(context.Background(), "/dev/sr0")
+	var exit *ExitError
+	if !errors.As(err, &exit) || len(exit.MakeMKVMessages()) == 0 {
+		t.Fatalf("err = %v, want an *ExitError with messages", err)
+	}
+	all := exit.MakeMKVMessages()
+	if last := all[len(all)-1]; last.Code != MsgPlainText || !strings.HasPrefix(last.Text, "fake makemkvcon:") ||
+		!strings.Contains(err.Error(), "fake makemkvcon:") {
+		t.Errorf("last message = %+v, err = %v; want the stderr line", last, err)
+	}
+}
+
+// A capped tail that lost its front drops the cut-off first line, so the
+// fragment doesn't pass for a message.
+func TestCappedBufferWholeLines(t *testing.T) {
+	c := newCappedBuffer(16)
+	c.Write([]byte("TINFO:0,2,0,\"The Matrix\"\nDRV:1\nx"))
+	if got := c.wholeLines(); got != "DRV:1\nx" {
+		t.Errorf("wholeLines = %q", got)
+	}
+	c = newCappedBuffer(64)
+	c.Write([]byte("whole\nlines"))
+	if got := c.wholeLines(); got != "whole\nlines" {
+		t.Errorf("an uncut buffer: %q", got)
 	}
 }
 

@@ -55,3 +55,11 @@ var (
 	// different disc from the one the job scanned.
 	ErrDiscChanged = errors.New("the disc in the drive is not the one this job scanned")
 )
+
+// NotStarted marks a step's error from before its work began, such as a
+// backup with no drive number (decision D72). It says nothing about how the
+// disc behaves, so the strategy history doesn't record it.
+type NotStarted struct{ Err error }
+
+func (e NotStarted) Error() string { return e.Err.Error() }
+func (e NotStarted) Unwrap() error { return e.Err }

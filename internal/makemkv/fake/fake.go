@@ -36,9 +36,14 @@ type Scenario struct {
 // given playlists (BDMV/PLAYLIST, a few bytes each) and one stream file
 // (BDMV/STREAM/00000.m2ts) written at Mkv's pace, stalling or failing as
 // Mkv says. Mkv.TitleName is not used.
+//
+// Like the real makemkvcon 2.0.0, it accepts only a "disc:N" source, and it
+// first prints the drive list (DRV lines for 16 slots), Drives filling the
+// first ones.
 type Backup struct {
 	Mkv
 	Playlists []string `json:"playlists"` // e.g. ["00800.mpls"]
+	Drives    []string `json:"drives"`    // devices of drives 0, 1...; default ["/dev/sr0"]
 }
 
 // Info is the behaviour of "makemkvcon info".
@@ -120,7 +125,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "fake makemkvcon: usage: backup <source> <dir>")
 			return 2
 		}
-		return backup(sc.Backup, pos[2], stdout, stderr)
+		return backup(sc.Backup, pos[1], pos[2], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "fake makemkvcon: unknown command %q\n", pos[0])
 		return 2
@@ -163,12 +168,35 @@ func mkv(m Mkv, title int, dir string, stdout, stderr io.Writer) int {
 	return pour(m, filepath.Join(dir, fmt.Sprintf("%s_t%02d.mkv", m.TitleName, title)), stdout, stderr)
 }
 
-func backup(b Backup, dir string, stdout, stderr io.Writer) int {
+func backup(b Backup, source, dir string, stdout, stderr io.Writer) int {
 	fail := func(err error) int {
 		fmt.Fprintf(stderr, "fake makemkvcon: %v\n", err)
 		return 2
 	}
 	fmt.Fprintf(stdout, "MSG:1005,0,1,\"MakeMKV v2.0.0 linux(x64-release) started\",\"%%1 started\",\"MakeMKV v2.0.0 linux(x64-release)\"\n")
+	// The drive scan, as makemkvcon 2.0.0 prints it before anything else.
+	if b.Drives == nil {
+		b.Drives = []string{"/dev/sr0"}
+	}
+	fmt.Fprintf(stdout, "PRGT:5018,0,\"Scanning CD-ROM devices\"\nPRGC:5018,0,\"Scanning CD-ROM devices\"\n")
+	fmt.Fprintf(stdout, "PRGV:0,0,65536\nPRGV:65536,65536,65536\n")
+	for i := range 16 {
+		if i < len(b.Drives) {
+			fmt.Fprintf(stdout, "DRV:%d,2,999,12,\"BD-RE FAKE DRIVE 1.00\",\"FAKE_DISC\",%q\n", i, b.Drives[i])
+		} else {
+			fmt.Fprintf(stdout, "DRV:%d,256,999,0,\"\",\"\",\"\"\n", i)
+		}
+	}
+	// Seen on the real one (2026-11-17): a plain line, then exit status 10.
+	n, err := strconv.Atoi(strings.TrimPrefix(source, "disc:"))
+	if !strings.HasPrefix(source, "disc:") || err != nil {
+		fmt.Fprintln(stdout, `Backup source must start with "disc:"`)
+		return 10
+	}
+	if n < 0 || n >= len(b.Drives) {
+		fmt.Fprintf(stdout, "MSG:5010,0,0,\"Failed to open disc\",\"Failed to open disc\"\n")
+		return 10
+	}
 	if b.ChunkBytes <= 0 {
 		b.ChunkBytes = 64 << 10
 	}

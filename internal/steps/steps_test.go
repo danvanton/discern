@@ -263,6 +263,27 @@ func TestCheckDiscComparesAFreshScan(t *testing.T) {
 	if err := s.CheckDisc(ctx, &jobs.Job{Drive: "/dev/sr0", Disc: &other}); !errors.Is(err, jobs.ErrDiscChanged) {
 		t.Errorf("different disc: err = %v, want ErrDiscChanged", err)
 	}
+
+	// A scan saved before v0.2.4 has no drive list; a rescan that confirms
+	// the disc gives it the rescan's, for the backup (decision D72).
+	old := *disc
+	old.Drives = nil
+	j := &jobs.Job{Drive: "/dev/sr0", Disc: &old}
+	if err := s.CheckDisc(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := j.Disc.DiscNumber("/dev/sr0"); err != nil || n != 0 {
+		t.Errorf("after the rescan: drive %d, %v", n, err)
+	}
+}
+
+// Without a drive list, a backup fails closed before makemkvcon starts.
+func TestBackupNeedsTheScansDriveList(t *testing.T) {
+	s := New(fakeRunner(t, fake.Scenario{}), nil)
+	err := s.Backup(ctx, &jobs.Job{Drive: "/dev/sr0", Disc: &makemkv.Disc{}}, t.TempDir(), nil)
+	if err == nil || !strings.Contains(err.Error(), "no drive list") {
+		t.Errorf("err = %v", err)
+	}
 }
 
 func abs(t *testing.T, p string) string {

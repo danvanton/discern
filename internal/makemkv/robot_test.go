@@ -52,6 +52,11 @@ func TestParseLine(t *testing.T) {
 			"Your MakeMKV registration key has expired",
 			Unknown{"", "Your MakeMKV registration key has expired"},
 		},
+		{
+			"plain text with a colon is still plain text (makemkvcon 2.0.0)",
+			`Backup source must start with "disc:"`,
+			Unknown{"", `Backup source must start with "disc:"`},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

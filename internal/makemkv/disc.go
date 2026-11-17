@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -26,6 +27,39 @@ type Disc struct {
 	// and plain-text notices (such as an expired-key warning). They are kept
 	// for diagnostics and shown to the user; they never fail the scan.
 	UnknownLines []string
+
+	// Drives is MakeMKV's drive list as the scan printed it (DRV lines, at
+	// most maxDrives). A backup needs a drive's number from it, because
+	// "makemkvcon backup" only accepts a "disc:N" source (decision D72).
+	// Scans saved before v0.2.4 have none.
+	Drives []Drive
+}
+
+// maxDrives bounds the drive list kept from a scan. MakeMKV prints 16 slots.
+const maxDrives = 64
+
+// DiscNumber is MakeMKV's number for the drive whose device is device
+// (for example "/dev/sr0"), from the scan's drive list (decision D72). It
+// fails closed: no list, no such drive, or the device listed twice is an
+// error.
+func (d *Disc) DiscNumber(device string) (int, error) {
+	if len(d.Drives) == 0 {
+		return 0, errors.New("the scan has no drive list (it was made before Discern kept one): take the disc out and put it back in to scan it again")
+	}
+	n, found := 0, 0
+	for _, dr := range d.Drives {
+		if dr.Device == device {
+			n, found = dr.Index, found+1
+		}
+	}
+	switch found {
+	case 0:
+		return 0, fmt.Errorf("MakeMKV's drive list in the scan has no drive %s", device)
+	case 1:
+		return n, nil
+	default:
+		return 0, fmt.Errorf("MakeMKV's drive list in the scan has %s %d times", device, found)
+	}
 }
 
 // Title is one title on the disc. On a Blu-ray a title is a playlist.
@@ -203,8 +237,12 @@ func (b *builder) add(rec Record) {
 		b.streams[r.Title][r.Stream][r.Attr] = r.Value
 	case Unknown:
 		b.d.UnknownLines = append(b.d.UnknownLines, r.Line)
+	case Drive:
+		if len(b.d.Drives) < maxDrives {
+			b.d.Drives = append(b.d.Drives, r)
+		}
 	}
-	// DRV and progress lines carry nothing for the Disc.
+	// Progress lines carry nothing for the Disc.
 }
 
 func (b *builder) disc() (*Disc, error) {

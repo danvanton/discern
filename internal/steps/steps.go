@@ -156,6 +156,13 @@ func (s *Steps) CheckDisc(ctx context.Context, j *jobs.Job) error {
 	if !SameDisc(j.Disc, now) {
 		return jobs.ErrDiscChanged
 	}
+	// The rescan is the newer drive list, for a backup's drive number
+	// (decision D72), and the only one a scan saved before v0.2.4 gets. The
+	// engine saves it with the job at its next move. A rescan without one
+	// leaves the saved list as it is.
+	if len(now.Drives) > 0 {
+		j.Disc.Drives = now.Drives
+	}
 	if known {
 		s.mu.Lock()
 		s.scanned[j.ID] = gen

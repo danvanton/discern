@@ -42,6 +42,7 @@ type fakeSteps struct {
 	onRip       func(func(float64)) // progress reports to send
 	onCheck     func(*jobs.Job)     // called by CheckDisc
 	ripStalls   bool                // Rip returns the watchdog's "stalled"
+	backupErr   error               // if set, what Backup returns
 	fallbackErr error               // what Fallback returns
 	remuxNote   string              // what Remux returns as its note
 	backupSaw   string              // the folder Backup was given
@@ -128,7 +129,10 @@ func (f *fakeSteps) Backup(_ context.Context, _ *jobs.Job, dir string, progress 
 	f.mu.Unlock()
 	os.MkdirAll(dir, 0o755)
 	os.WriteFile(filepath.Join(dir, "disc.m2ts"), []byte("backup"), 0o644)
-	return f.record("backup")
+	if err := f.record("backup"); err != nil {
+		return err
+	}
+	return f.backupErr
 }
 func (f *fakeSteps) Remux(_ context.Context, _ *jobs.Job, backupDir, dir string, progress func(float64)) (string, error) {
 	if _, err := os.Stat(filepath.Join(backupDir, "disc.m2ts")); err != nil {

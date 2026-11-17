@@ -63,17 +63,38 @@ func NewRunner(bin string) *Runner {
 type ExitError struct {
 	Op       string // "info", "mkv" or "backup"
 	Code     int
-	Messages []Message
-	Stderr   string
+	Messages []Message // from stdout: MSG lines and plain text
+	Stderr   []Message // the last lines of stderr, as plain text
 }
 
-// MakeMKVMessages are the run's messages, the best clue to what went wrong.
-func (e *ExitError) MakeMKVMessages() []Message { return e.Messages }
+// MakeMKVMessages are the run's messages, then its stderr lines, the best
+// clue to what went wrong.
+func (e *ExitError) MakeMKVMessages() []Message {
+	return append(append([]Message(nil), e.Messages...), e.Stderr...)
+}
 
+// msgStarted is the line every makemkvcon run prints first: "MakeMKV v2.0.0
+// linux(x64-release) started".
+const msgStarted = 1005
+
+// Error names the run's last message from stdout. Only when stdout has
+// nothing past the start-up line does stderr's last line stand in. The text
+// is shortened: it becomes the job's note.
 func (e *ExitError) Error() string {
 	s := fmt.Sprintf("makemkvcon %s exited with status %d", e.Op, e.Code)
+	m, ok := Message{}, false
 	if n := len(e.Messages); n > 0 {
-		s += fmt.Sprintf(": MSG %d %q", e.Messages[n-1].Code, e.Messages[n-1].Text)
+		m, ok = e.Messages[n-1], true
+	}
+	if n := len(e.Stderr); n > 0 && (!ok || m.Code == msgStarted) {
+		m, ok = e.Stderr[n-1], true
+	}
+	switch {
+	case !ok:
+	case m.Code == MsgPlainText:
+		s += fmt.Sprintf(": %q", shorten(m.Text, 200))
+	default:
+		s += fmt.Sprintf(": MSG %d %q", m.Code, shorten(m.Text, 200))
 	}
 	return s
 }
@@ -140,7 +161,7 @@ func (r *Runner) Info(ctx context.Context, device string) (*Disc, error) {
 		// A failed scan usually also leaves its output incomplete. The exit
 		// status and MakeMKV's own messages are the real cause, so they win
 		// over the parse error.
-		return nil, exitError("info", waitErr, messagesIn([]byte(tail.String())), stderr.String())
+		return nil, exitError("info", waitErr, messagesIn([]byte(tail.wholeLines())), stderr)
 	default:
 		return nil, fmt.Errorf("makemkvcon info: %w", parseErr)
 	}
@@ -159,7 +180,7 @@ type RipResult struct {
 // like progress, and would be mixed up with this rip's files. Progress and
 // the watchdog work as watched says.
 func (r *Runner) Rip(ctx context.Context, device string, title int, outDir string, onProgress func(Progress)) (*RipResult, error) {
-	msgs, err := r.watched(ctx, "mkv", device, outDir, onProgress,
+	msgs, err := r.watched(ctx, "mkv", device, outDir, onProgress, nil,
 		"-r", "--progress=-same", "--minlength=0", "mkv", "dev:"+device, strconv.Itoa(title), outDir)
 	if err != nil {
 		return nil, err
@@ -176,10 +197,76 @@ func (r *Runner) Rip(ctx context.Context, device string, title int, outDir strin
 // outDir must be empty, as for Rip, and the watchdog watches it the same
 // way: a backup that stops growing while the drive reads is stalled. It
 // returns MakeMKV's messages.
-func (r *Runner) Backup(ctx context.Context, device, outDir string, onProgress func(Progress)) ([]Message, error) {
-	return r.watched(ctx, "backup", device, outDir, onProgress,
-		"-r", "--progress=-same", "backup", "--decrypt", "dev:"+device, outDir)
+//
+// makemkvcon's backup takes only a "disc:N" source, not "dev:<device>", so
+// disc is device's number from the scan's drive list (Disc.DiscNumber,
+// decision D72). The numbers could have changed since the scan, so the run
+// is checked against the drive list MakeMKV prints as it starts: if drive
+// disc isn't device there, or isn't listed at all, the backup is stopped.
+func (r *Runner) Backup(ctx context.Context, device string, disc int, outDir string, onProgress func(Progress)) ([]Message, error) {
+	if disc < 0 {
+		return nil, fmt.Errorf("drive number %d for %s is not valid", disc, device)
+	}
+	return r.watched(ctx, "backup", device, outDir, onProgress, &driveCheck{device: device, disc: disc},
+		"-r", "--progress=-same", "backup", "--decrypt", "disc:"+strconv.Itoa(disc), outDir)
 }
+
+// outputCheck vets makemkvcon's output records as they arrive (watched's
+// vet): check returning an error stops the run, and ended, called after a
+// clean exit, can refuse a run that never showed what check needed.
+type outputCheck interface {
+	check(Record) error
+	ended() error
+}
+
+// driveCheck is Backup's outputCheck: once makemkvcon's drive list (a block
+// of DRV lines) has been printed, drive disc must be in it with device.
+type driveCheck struct {
+	device  string
+	disc    int
+	listing bool // a DRV line has been seen
+	listed  bool // drive disc was in the list, with device
+}
+
+func (c *driveCheck) check(rec Record) error {
+	if d, ok := rec.(Drive); ok {
+		c.listing = true
+		if d.Index == c.disc {
+			if d.Device != c.device {
+				return fmt.Errorf("MakeMKV's drive %d is %q now, not %s: the drive numbers changed since the scan; take the disc out and put it back in to scan it again", c.disc, d.Device, c.device)
+			}
+			c.listed = true
+		}
+		return nil
+	}
+	if c.listing && !c.listed {
+		return fmt.Errorf("MakeMKV's drive list has no drive %d (%s): take the disc out and put it back in to scan it again", c.disc, c.device)
+	}
+	return nil
+}
+
+func (c *driveCheck) ended() error {
+	if !c.listed {
+		return fmt.Errorf("makemkvcon backup never listed drive %d (%s), so it can't be told which drive it read", c.disc, c.device)
+	}
+	return nil
+}
+
+// RefusedError reports a run its output check refused: stopped while
+// running, or, with Finished, refused after it exited cleanly. Messages are
+// MakeMKV's up to then.
+type RefusedError struct {
+	Op       string
+	Err      error
+	Finished bool
+	Messages []Message
+}
+
+func (e *RefusedError) Error() string { return fmt.Sprintf("makemkvcon %s stopped: %v", e.Op, e.Err) }
+func (e *RefusedError) Unwrap() error { return e.Err }
+
+// MakeMKVMessages are the run's messages up to the refusal.
+func (e *RefusedError) MakeMKVMessages() []Message { return e.Messages }
 
 // watched runs makemkvcon with args, writing into outDir, under the
 // watchdog, and returns MakeMKV's messages once it exits cleanly. op names
@@ -194,7 +281,10 @@ func (r *Runner) Backup(ctx context.Context, device, outDir string, onProgress f
 // The watchdog samples the process every Watchdog.Interval. On a stall or
 // hang it saves the evidence, stops the process, and watched returns a
 // *WatchdogError.
-func (r *Runner) watched(ctx context.Context, op, device, outDir string, onProgress func(Progress), args ...string) ([]Message, error) {
+//
+// vet, if not nil, checks the output records as they arrive; a record it
+// refuses stops the process, and watched returns a *RefusedError.
+func (r *Runner) watched(ctx context.Context, op, device, outDir string, onProgress func(Progress), vet outputCheck, args ...string) ([]Message, error) {
 	if err := r.Watchdog.Validate(); err != nil {
 		return nil, err
 	}
@@ -216,7 +306,7 @@ func (r *Runner) watched(ctx context.Context, op, device, outDir string, onProgr
 
 	progress := newProgressForwarder(onProgress)
 	defer progress.close() // waits for the last callback
-	out := &robotLog{tail: newRing[string](200)}
+	out := &robotLog{tail: newRing[string](200), vet: vet}
 	readDone := make(chan error, 1)
 	go func() {
 		// On unreadable output, stop the process: a rip whose output can't
@@ -264,15 +354,22 @@ loop:
 	switch {
 	case werr != nil:
 		return nil, werr
+	case out.refusal() != nil:
+		return nil, &RefusedError{Op: op, Err: out.refusal(), Messages: out.messages()}
 	case waitErr == nil && readErr == nil:
 		// A clean exit counts, even if ctx was cancelled a moment later.
+		if vet != nil {
+			if err := vet.ended(); err != nil {
+				return nil, &RefusedError{Op: op, Err: err, Finished: true, Messages: out.messages()}
+			}
+		}
 		return out.messages(), nil
 	case ctx.Err() != nil:
 		return nil, fmt.Errorf("makemkvcon %s: %w", op, ctx.Err())
 	case readErr != nil:
 		return nil, fmt.Errorf("reading makemkvcon output: %w", readErr)
 	default:
-		return nil, exitError(op, waitErr, out.messages(), stderr.String())
+		return nil, exitError(op, waitErr, out.messages(), stderr)
 	}
 }
 
@@ -336,12 +433,16 @@ type robotLog struct {
 	mu   sync.Mutex
 	tail *ring[string]
 	msgs []Message
+
+	vet     outputCheck // if set, vets each record
+	refused error       // the first error vet returned
 }
 
 // consume reads r to the end. If a line can't be read (longer than maxLine),
-// it calls onBadOutput, then keeps draining r so the process never blocks on
-// a full pipe, and returns the read error once r ends.
-func (l *robotLog) consume(r io.Reader, onProgress func(Progress), onBadOutput func()) error {
+// or vet refuses a record, it calls stop, then keeps draining r so the
+// process never blocks on a full pipe. It returns the read error once r
+// ends.
+func (l *robotLog) consume(r io.Reader, onProgress func(Progress), stop func()) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), maxLine)
 	for sc.Scan() {
@@ -349,17 +450,26 @@ func (l *robotLog) consume(r io.Reader, onProgress func(Progress), onBadOutput f
 		rec, err := ParseLine(line)
 		l.mu.Lock()
 		l.tail.add(line)
-		if m, ok := rec.(Message); ok && err == nil {
+		if m, ok := asMessage(rec, err); ok {
 			l.msgs = append(l.msgs, m)
 		}
+		vet := l.vet != nil && l.refused == nil && err == nil
 		l.mu.Unlock()
+		if vet {
+			if cerr := l.vet.check(rec); cerr != nil {
+				l.mu.Lock()
+				l.refused = cerr
+				l.mu.Unlock()
+				stop()
+			}
+		}
 		if p, ok := rec.(Progress); ok && err == nil {
 			onProgress(p)
 		}
 	}
 	err := sc.Err()
 	if err != nil {
-		onBadOutput()
+		stop()
 		io.Copy(io.Discard, r)
 	}
 	return err
@@ -375,6 +485,31 @@ func (l *robotLog) messages() []Message {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return append([]Message(nil), l.msgs...)
+}
+
+func (l *robotLog) refusal() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.refused
+}
+
+// asMessage is the message a parsed line carries: a MSG line, or a plain
+// text line, which MakeMKV prints outside its robot records for some errors
+// ("Backup source must start with "disc:"") and is kept as a message with
+// code MsgPlainText, so a failure shows it.
+func asMessage(rec Record, err error) (Message, bool) {
+	if err != nil {
+		return Message{}, false
+	}
+	switch r := rec.(type) {
+	case Message:
+		return r, true
+	case Unknown:
+		if r.Prefix == "" && strings.TrimSpace(r.Line) != "" {
+			return Message{Code: MsgPlainText, Text: strings.TrimSpace(r.Line)}, true
+		}
+	}
+	return Message{}, false
 }
 
 // progressForwarder hands progress to a callback on its own goroutine, keeping
@@ -421,24 +556,35 @@ func (f *progressForwarder) close() {
 	<-f.done
 }
 
-// messagesIn picks the MSG records out of raw output, for error reports on
-// output that may not parse as a whole.
+// messagesIn picks the messages (asMessage) out of raw output, for error
+// reports on output that may not parse as a whole.
 func messagesIn(out []byte) []Message {
 	var msgs []Message
 	for _, line := range strings.Split(string(out), "\n") {
-		if rec, err := ParseLine(line); err == nil {
-			if m, ok := rec.(Message); ok {
-				msgs = append(msgs, m)
-			}
+		if m, ok := asMessage(ParseLine(line)); ok {
+			msgs = append(msgs, m)
 		}
 	}
 	return msgs
 }
 
-func exitError(op string, err error, msgs []Message, stderr string) error {
+// keptStderrLines is how many of a failed run's last stderr lines join its
+// messages.
+const keptStderrLines = 10
+
+// exitError reports a run that exited with an error. The last lines
+// makemkvcon wrote to stderr are kept as plain-text messages, so the failure
+// page shows them too.
+func exitError(op string, err error, msgs []Message, stderr *cappedBuffer) error {
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
-		return &ExitError{Op: op, Code: ee.ExitCode(), Messages: msgs, Stderr: stderr}
+		var lines []Message
+		for _, l := range strings.Split(stderr.wholeLines(), "\n") {
+			if l = strings.TrimSpace(l); l != "" {
+				lines = append(lines, Message{Code: MsgPlainText, Text: l})
+			}
+		}
+		return &ExitError{Op: op, Code: ee.ExitCode(), Messages: msgs, Stderr: lines[max(0, len(lines)-keptStderrLines):]}
 	}
 	return fmt.Errorf("makemkvcon %s: %w", op, err)
 }
@@ -476,6 +622,7 @@ type cappedBuffer struct {
 	mu  sync.Mutex
 	b   bytes.Buffer
 	max int
+	cut bool // bytes were dropped from the front
 }
 
 func newCappedBuffer(max int) *cappedBuffer { return &cappedBuffer{max: max} }
@@ -486,12 +633,25 @@ func (c *cappedBuffer) String() string {
 	return c.b.String()
 }
 
+// wholeLines is what String returns, less the first line when the front
+// was dropped: that line is a fragment, which must not pass for a message.
+func (c *cappedBuffer) wholeLines() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s := c.b.String()
+	if c.cut {
+		_, s, _ = strings.Cut(s, "\n")
+	}
+	return s
+}
+
 func (c *cappedBuffer) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.b.Write(p)
 	if over := c.b.Len() - c.max; over > 0 {
 		c.b.Next(over)
+		c.cut = true
 	}
 	return len(p), nil
 }

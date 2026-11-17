@@ -16,12 +16,19 @@ const (
 	msgOpenFailed       = 5010 // "Failed to open disc"
 )
 
-// Problem reports whether m is one of the MakeMKV errors Discern knows, for
-// the failure page to mark. MakeMKV's flags field is 0 on every message
-// recorded so far, so it can't tell errors apart; the codes can.
+// MsgPlainText is the code of a Message made from a plain text line, which
+// has no code of its own (MakeMKV's codes start at 1000). MakeMKV prints
+// some errors that way even in robot mode, such as `Backup source must start
+// with "disc:"`.
+const MsgPlainText = 0
+
+// Problem reports whether m is one of the MakeMKV errors Discern knows, or a
+// plain text line, for the failure page to mark. MakeMKV's flags field is 0
+// on every message recorded so far, so it can't tell errors apart; the codes
+// can.
 func (m Message) Problem() bool {
 	switch m.Code {
-	case msgReadError, msgTitleSkipped, msgTitleUndecodable, msgOpenFailed:
+	case MsgPlainText, msgReadError, msgTitleSkipped, msgTitleUndecodable, msgOpenFailed:
 		return true
 	}
 	return false

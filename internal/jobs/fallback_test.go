@@ -199,6 +199,29 @@ func TestRestartInTheFallbackStates(t *testing.T) {
 	}
 }
 
+// A backup that failed before it began (no drive number, decision D72)
+// fails the job but stays out of the strategy history; one that ran and
+// failed is recorded.
+func TestABackupThatNeverStartedIsNotRecorded(t *testing.T) {
+	fp := sampleDisc.Fingerprint()
+	e := newEnv(t, &fakeSteps{backupErr: jobs.NotStarted{Err: errors.New("no drive list")}})
+	j := e.approved(t, jobs.Backup)
+	e.engine.Run(ctx, j.ID)
+	if got, _ := e.store.Job(ctx, j.ID); got.State != jobs.Failed || !strings.Contains(got.Note, "no drive list") {
+		t.Errorf("state %s, note %q", got.State, got.Note)
+	}
+	if r, _ := e.store.LastResult(ctx, fp, "", jobs.Backup); r != "" {
+		t.Errorf("history: Backup %q, want nothing", r)
+	}
+
+	e = newEnv(t, &fakeSteps{backupErr: errors.New("backup broke")})
+	j = e.approved(t, jobs.Backup)
+	e.engine.Run(ctx, j.ID)
+	if r, _ := e.store.LastResult(ctx, fp, "", jobs.Backup); r != jobs.AttemptFailed {
+		t.Errorf("history: Backup %q, want failed", r)
+	}
+}
+
 // The manual route (decision D69): approving with backup + remux skips
 // Direct; a rip that failed can be retried with it.
 func TestTheManualRoute(t *testing.T) {

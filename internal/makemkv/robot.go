@@ -129,7 +129,9 @@ func ParseLine(line string) (Record, error) {
 	line = strings.TrimRight(line, "\r\n")
 	prefix, rest, ok := strings.Cut(line, ":")
 	if !ok || !knownPrefixes[prefix] {
-		if !ok {
+		// Plain text can hold a colon too (`Backup source must start with
+		// "disc:"`), so only capital letters before it make a record prefix.
+		if !ok || !isPrefix(prefix) {
 			prefix = ""
 		}
 		return Unknown{Prefix: prefix, Line: line}, nil
@@ -143,6 +145,20 @@ func ParseLine(line string) (Record, error) {
 		return nil, fmt.Errorf("%s line %q: %w", prefix, line, err)
 	}
 	return rec, nil
+}
+
+// isPrefix reports whether s looks like a robot record type: capital letters
+// only, as MSG, DRV and TINFO are.
+func isPrefix(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 func build(prefix, line string, f fields) (Record, error) {

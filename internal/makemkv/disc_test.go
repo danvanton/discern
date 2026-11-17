@@ -39,6 +39,30 @@ func TestParseInfoDisc(t *testing.T) {
 	}
 }
 
+// The scan keeps MakeMKV's drive list, and a drive's number is read from it,
+// failing closed (decision D72).
+func TestDiscNumber(t *testing.T) {
+	d := loadSample(t)
+	want := []Drive{{0, 2, 999, 12, "BD-RE ASUS BW-16D1HT 3.10", "SAMPLE_MOVIE", "/dev/sr0"}, {1, 256, 999, 0, "", "", ""}}
+	if !reflect.DeepEqual(d.Drives, want) {
+		t.Fatalf("Drives = %+v", d.Drives)
+	}
+	if n, err := d.DiscNumber("/dev/sr0"); err != nil || n != 0 {
+		t.Errorf("/dev/sr0: %d, %v", n, err)
+	}
+	if _, err := d.DiscNumber("/dev/sr1"); err == nil {
+		t.Error("a drive the list doesn't have got a number")
+	}
+	twice := &Disc{Drives: []Drive{{Index: 0, Device: "/dev/sr0"}, {Index: 3, Device: "/dev/sr0"}}}
+	if _, err := twice.DiscNumber("/dev/sr0"); err == nil {
+		t.Error("a device listed twice got a number")
+	}
+	old := &Disc{} // saved before v0.2.4
+	if _, err := old.DiscNumber("/dev/sr0"); err == nil || !strings.Contains(err.Error(), "put it back in") {
+		t.Errorf("a scan with no drive list: %v", err)
+	}
+}
+
 func TestParseInfoMainTitle(t *testing.T) {
 	m := loadSample(t).Titles[0]
 	checks := []struct {

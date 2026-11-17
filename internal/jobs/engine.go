@@ -256,7 +256,7 @@ func (e *Engine) step(ctx context.Context, j *Job) error {
 			return e.fail(ctx, j, "clear staging", err)
 		}
 		if err := e.steps.Backup(ctx, j, filepath.Join(dir, backupFolder), e.progressWriter(j.ID)); err != nil {
-			if ctx.Err() == nil {
+			if ctx.Err() == nil && !errors.As(err, new(NotStarted)) {
 				e.record(ctx, j, Backup, AttemptFailed)
 			}
 			return e.fail(ctx, j, "backup", err)
