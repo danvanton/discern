@@ -45,7 +45,7 @@
     {{end}}
   </ol>
   {{end}}
-  {{if ripping .Job.State}}
+  {{if copying .Job.State}}
   {{template "progress" .Job.Progress}}
   <dl class="stats">
     <div><dt>Elapsed</dt><dd>{{if .Card.Timing.Running}}{{minutes .Card.Timing.Elapsed}}{{else}}–{{end}}</dd></div>
@@ -54,7 +54,8 @@
     <div><dt>Reading</dt><dd>{{if .ReadKnown}}{{rate .ReadRate}}{{else}}–{{end}}</dd></div>
     <div><dt>Writing</dt><dd>{{rate .WriteRate}}</dd></div>
     <div><dt>Watchdog</dt><dd class="verdict {{.Verdict}}">{{.Verdict}}</dd></div>
-    {{else}}
+    {{end}}
+    {{if and (not .Card.Live) (not (remuxing .Job.State))}}
     <div><dt>Speed</dt><dd class="muted">measuring</dd></div>
     {{end}}
   </dl>
@@ -86,6 +87,9 @@
   <div class="actions">
     {{if failed .Job.State}}
     <form method="post" action="/jobs/{{.Job.ID}}/retry"><button type="submit" class="primary">Retry</button></form>
+    {{if and (eq (print .Job.FailedIn) "ripping") (remuxable .Job)}}
+    <form method="post" action="/jobs/{{.Job.ID}}/retry-backup"><button type="submit">Rip with backup + remux</button></form>
+    {{end}}
     {{end}}
     {{if or (cancellable .Job.State) (failed .Job.State)}}
     <form method="post" action="/jobs/{{.Job.ID}}/cancel"><button type="submit" class="danger">Cancel job</button></form>
@@ -171,6 +175,9 @@
   </details>
 </section>
 
+{{if eq (print .Job.Strategy) "backup"}}
+<p class="alert" role="alert">Backup + remux couldn't start: {{.Job.Note}}. Free some space in staging and choose it again, or rip directly.</p>
+{{end}}
 <form method="post" action="/jobs/{{$id}}/approve" class="panel ask review">
   <input type="hidden" name="tmdb_id" value="{{if $rv.Movie}}{{$rv.Movie}}{{end}}">
   <h2>Titles to rip</h2>
@@ -184,7 +191,7 @@
       <ul class="reasons muted small">{{range .}}<li>{{sentence .}}</li>{{end}}</ul>
     </details>{{end}}
   </div>
-  {{else}}{{if .Job.Note}}<p class="muted small">Suggested because {{.Job.Note}}.</p>{{end}}{{end}}
+  {{else}}{{if and .Job.Note (ne (print .Job.Strategy) "backup")}}<p class="muted small">Suggested because {{.Job.Note}}.</p>{{end}}{{end}}
   {{with $rv.Groups.Cuts}}
   <details class="group" open><summary>Possible other cuts ({{len .}})</summary>
     <p class="muted small">Nearly as long as the title above: perhaps another cut of the movie.</p>
@@ -221,7 +228,9 @@
     </fieldset>
   </details>
 
-  <button type="submit" class="primary">Rip and import</button>
+  {{if eq (print .Job.Strategy) "backup"}}<button type="submit" name="strategy" value="direct" class="primary">Rip directly</button>
+  {{else}}<button type="submit" class="primary">Rip and import</button>{{end}}
+  {{if remuxable .Job}}<button type="submit" name="strategy" value="backup" title="Copies the whole disc, then builds the MKV with mkvmerge: for a disc whose rip stalls">Rip with backup + remux</button>{{end}}
 </form>
 <script src="/static/toggle.js" defer></script>
 {{end}}

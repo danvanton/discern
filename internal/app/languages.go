@@ -68,6 +68,14 @@ func (a *App) languagesFor(ctx context.Context, j *jobs.Job) (l *settings.Langua
 	return st.Languages, false, nil
 }
 
+// Languages is the track choice for j's rip, for the remux (decision D70):
+// the disc's own or the Settings page's; nil keeps every track. It is
+// Steps.Languages.
+func (a *App) Languages(ctx context.Context, j *jobs.Job) (*settings.Languages, error) {
+	l, _, err := a.languagesFor(ctx, j)
+	return l, err
+}
+
 // LanguagesChosen reports whether j's rip keeps only chosen languages, which
 // makes the file smaller than the scan said. It is Steps.Trimmed.
 func (a *App) LanguagesChosen(ctx context.Context, j *jobs.Job) (bool, error) {

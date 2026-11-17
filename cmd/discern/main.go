@@ -171,6 +171,13 @@ func run(log *slog.Logger) error {
 		return drive.WaitReady(ctx, d, 2*time.Minute, time.Second)
 	}
 	engine := jobs.NewEngine(st, jobSteps, cfg.StagingDir, log)
+	// The strategy history keys on MakeMKV's version (decision D66); a
+	// makemkvcon from DISCERN_MAKEMKVCON has none Discern knows.
+	if cfg.MakeMKVCon == "" {
+		if pin, err := install.Pinned(); err == nil {
+			engine.MakeMKVVersion = pin.Version
+		}
+	}
 
 	a := app.New(ctx, st, engine, rc, log)
 	a.Drives, a.MakeMKVCon = cfg.Drives, makemkvcon
@@ -204,13 +211,16 @@ func run(log *slog.Logger) error {
 		// tells Radarr the file's audio languages.
 		tracks := steps.Remembered(steps.Mkvmerge(bin))
 		jobSteps.Tracks = tracks
+		// The Backup + remux strategy builds its MKVs with it too (D64-D70).
+		jobSteps.Mkvmerge = bin
+		jobSteps.Languages = a.Languages
 		imp.Log = log
 		imp.AudioLanguages = func(ctx context.Context, file string) ([]string, error) {
 			t, err := tracks(ctx, file)
 			return t.AudioLanguages, err
 		}
 	} else {
-		log.Warn("mkvmerge not found: rips are checked by size only, not for missing audio, and Radarr isn't told their languages")
+		log.Warn("mkvmerge not found: rips are checked by size only, not for missing audio, Radarr isn't told their languages, and a stalled rip can't fall back to backup + remux")
 	}
 	// The redesigned pages (decisions D23, D29-D31): posters cached in the
 	// config folder, the trays' states, and each rip's speeds.

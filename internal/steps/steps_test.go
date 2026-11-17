@@ -24,6 +24,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv(fake.EnvVar) != "" {
 		os.Exit(fake.Main(os.Args[1:], os.Stdout, os.Stderr))
 	}
+	if os.Getenv(fake.MkvmergeEnvVar) != "" {
+		os.Exit(fake.Mkvmerge(os.Args[1:], os.Stdout, os.Stderr))
+	}
 	os.Exit(m.Run())
 }
 

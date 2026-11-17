@@ -20,6 +20,9 @@ const (
 	Selecting   State = "selecting"   // choosing the titles to rip
 	NeedsYou    State = "needs_you"   // waiting for the user to choose or approve
 	Ripping     State = "ripping"     // makemkvcon mkv, under the watchdog
+	Stalled     State = "stalled"     // the watchdog stopped a stalled rip; the fallback comes next (D64)
+	BackingUp   State = "backing_up"  // makemkvcon backup copies the disc (D11)
+	Remuxing    State = "remuxing"    // mkvmerge builds the MKVs from the backup
 	Verifying   State = "verifying"   // checking the files against the scan
 	Importing   State = "importing"   // handing the files to Radarr or the library
 	Done        State = "done"
@@ -36,13 +39,19 @@ var transitions = map[State][]State{
 	Identifying: {Selecting, Failed, Cancelled},
 	Selecting:   {Ripping, NeedsYou, Failed, Cancelled},
 	NeedsYou:    {Ripping, Cancelled},
-	Ripping:     {Verifying, Failed, Cancelled},
-	Verifying:   {Importing, Failed, Cancelled},
+	// BackingUp: the job takes the Backup + remux route, chosen by the user
+	// or by the strategy history (decisions D66, D69).
+	Ripping: {Verifying, Stalled, BackingUp, Failed, Cancelled},
+	Stalled: {BackingUp, Failed, Cancelled},
+	// NeedsYou: staging hasn't the space for a backup (decision D68).
+	BackingUp: {Remuxing, NeedsYou, Failed, Cancelled},
+	Remuxing:  {Verifying, Failed, Cancelled},
+	Verifying: {Importing, Failed, Cancelled},
 	// No Cancelled: an import that has started must finish or fail, so
 	// Radarr and Discern never disagree about where the file is.
 	Importing: {Done, Failed},
 	// Retry resumes at the step that failed, or rescans from the start.
-	Failed:    {Detected, Ripping, Verifying, Importing, Cancelled},
+	Failed:    {Detected, Ripping, BackingUp, Remuxing, Verifying, Importing, Cancelled},
 	Done:      nil,
 	Cancelled: nil,
 }
@@ -50,7 +59,7 @@ var transitions = map[State][]State{
 // AllStates returns every state, in the order a job meets them.
 func AllStates() []State {
 	return []State{Detected, Scanning, Identifying, Selecting, NeedsYou, Ripping,
-		Verifying, Importing, Done, Failed, Cancelled}
+		Stalled, BackingUp, Remuxing, Verifying, Importing, Done, Failed, Cancelled}
 }
 
 // CanMove reports whether a job may go from one state to another.

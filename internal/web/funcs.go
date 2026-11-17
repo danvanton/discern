@@ -83,13 +83,17 @@ var funcs = template.FuncMap{
 	"cancellable": func(s jobs.State) bool {
 		return jobs.CanMove(s, jobs.Cancelled) && s != jobs.Failed
 	},
-	"ripping": func(s jobs.State) bool { return s == jobs.Ripping },
-	"live":    func(s jobs.State) bool { return s.Active() && s != jobs.NeedsYou },
-	"name":    jobName,
-	"explain": explain,
-	"doing":   doing,
-	"tray":    trayLabel,
-	"minutes": format.Minutes,
+	// copying: a step that writes the movie, with a progress bar and
+	// speeds: a rip, or a backup and its remux (decision D65).
+	"copying":   copying,
+	"remuxing":  func(s jobs.State) bool { return s == jobs.Remuxing },
+	"remuxable": remuxable,
+	"live":      func(s jobs.State) bool { return s.Active() && s != jobs.NeedsYou },
+	"name":      jobName,
+	"explain":   explain,
+	"doing":     doing,
+	"tray":      trayLabel,
+	"minutes":   format.Minutes,
 	// left words an estimate: "about 25 min", or "under a minute" (never
 	// "about under a minute").
 	"left": func(d time.Duration) string {
@@ -143,6 +147,12 @@ func doing(j *jobs.Job) string {
 		return "Needs you: check and approve"
 	case jobs.Ripping:
 		return fmt.Sprintf("Ripping %d%%", int(j.Progress*100+0.5))
+	case jobs.Stalled:
+		return "The rip stalled: switching to backup + remux"
+	case jobs.BackingUp:
+		return fmt.Sprintf("Backing up the disc %d%%", int(j.Progress*100+0.5))
+	case jobs.Remuxing:
+		return fmt.Sprintf("Remuxing %d%%", int(j.Progress*100+0.5))
 	case jobs.Verifying:
 		return "Checking the rip"
 	case jobs.Importing:
@@ -178,8 +188,32 @@ func stateLabel(s jobs.State) string {
 		return "Needs you"
 	case jobs.Detected:
 		return "Disc found"
+	case jobs.BackingUp:
+		return "Backing up"
 	}
 	return strings.ToUpper(string(s)[:1]) + string(s)[1:]
+}
+
+// copying reports whether s is a step that writes the movie, timed with a
+// progress bar: a rip, or a backup and its remux.
+func copying(s jobs.State) bool {
+	return s == jobs.Ripping || s == jobs.BackingUp || s == jobs.Remuxing
+}
+
+// remuxable reports whether j's disc can take the Backup + remux route: its
+// titles come from Blu-ray playlists, which mkvmerge can remux (a DVD's
+// don't). Whether mkvmerge is installed, and the space, are checked when
+// the route starts.
+func remuxable(j *jobs.Job) bool {
+	if j == nil || j.Disc == nil {
+		return false
+	}
+	for _, t := range j.Disc.Titles {
+		if t.BluRaySource() {
+			return true
+		}
+	}
+	return false
 }
 
 // stateKind is the CSS class that colours a state.

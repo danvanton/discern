@@ -1,8 +1,8 @@
 // Package fake is a stand-in for makemkvcon, for tests and development
-// without a drive. It understands the two commands Discern uses, "info" and
-// "mkv", and behaves as a scenario says: replay a recorded scan, write a rip
-// at a given pace, stall the way MakeMKV 2.0.0 did on a Dolby Vision UHD disc,
-// or freeze completely.
+// without a drive. It understands the commands Discern uses, "info", "mkv"
+// and "backup", and behaves as a scenario says: replay a recorded scan, write
+// a rip or a backup at a given pace, stall the way MakeMKV 2.0.0 did on a
+// Dolby Vision UHD disc, or freeze completely.
 //
 // The scenario is JSON in the FAKE_MAKEMKVCON environment variable, so the
 // same fake serves Go tests (which re-run the test binary as the fake) and
@@ -27,8 +27,18 @@ const EnvVar = "FAKE_MAKEMKVCON"
 
 // Scenario describes how the fake behaves. Zero values are sensible defaults.
 type Scenario struct {
-	Info Info `json:"info"`
-	Mkv  Mkv  `json:"mkv"`
+	Info   Info   `json:"info"`
+	Mkv    Mkv    `json:"mkv"`
+	Backup Backup `json:"backup"`
+}
+
+// Backup is the behaviour of "makemkvcon backup": a disc folder with the
+// given playlists (BDMV/PLAYLIST, a few bytes each) and one stream file
+// (BDMV/STREAM/00000.m2ts) written at Mkv's pace, stalling or failing as
+// Mkv says. Mkv.TitleName is not used.
+type Backup struct {
+	Mkv
+	Playlists []string `json:"playlists"` // e.g. ["00800.mpls"]
 }
 
 // Info is the behaviour of "makemkvcon info".
@@ -105,6 +115,12 @@ func Main(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		return mkv(sc.Mkv, title, pos[3], stdout, stderr)
+	case "backup":
+		if len(pos) != 3 {
+			fmt.Fprintln(stderr, "fake makemkvcon: usage: backup <source> <dir>")
+			return 2
+		}
+		return backup(sc.Backup, pos[2], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "fake makemkvcon: unknown command %q\n", pos[0])
 		return 2
@@ -142,18 +158,50 @@ func mkv(m Mkv, title int, dir string, stdout, stderr io.Writer) int {
 			return fail(err)
 		}
 	}
+	fmt.Fprintf(stdout, "PRGT:5018,0,\"Saving to MKV file\"\n")
+	fmt.Fprintf(stdout, "PRGC:5018,0,\"Saving to MKV file\"\n")
+	return pour(m, filepath.Join(dir, fmt.Sprintf("%s_t%02d.mkv", m.TitleName, title)), stdout, stderr)
+}
+
+func backup(b Backup, dir string, stdout, stderr io.Writer) int {
+	fail := func(err error) int {
+		fmt.Fprintf(stderr, "fake makemkvcon: %v\n", err)
+		return 2
+	}
+	fmt.Fprintf(stdout, "MSG:1005,0,1,\"MakeMKV v2.0.0 linux(x64-release) started\",\"%%1 started\",\"MakeMKV v2.0.0 linux(x64-release)\"\n")
+	if b.ChunkBytes <= 0 {
+		b.ChunkBytes = 64 << 10
+	}
+	for _, sub := range []string{"PLAYLIST", "STREAM"} {
+		if err := os.MkdirAll(filepath.Join(dir, "BDMV", sub), 0o755); err != nil {
+			return fail(err)
+		}
+	}
+	for _, p := range b.Playlists {
+		if err := os.WriteFile(filepath.Join(dir, "BDMV", "PLAYLIST", filepath.Base(p)), []byte("MPLS0300"), 0o644); err != nil {
+			return fail(err)
+		}
+	}
+	fmt.Fprintf(stdout, "PRGT:5017,0,\"Backing up disc\"\n")
+	return pour(b.Mkv, filepath.Join(dir, "BDMV", "STREAM", "00000.m2ts"), stdout, stderr)
+}
+
+// pour writes m.TotalBytes into path at m's pace, with progress lines, and
+// stalls or fails as m says.
+func pour(m Mkv, path string, stdout, stderr io.Writer) int {
+	fail := func(err error) int {
+		fmt.Fprintf(stderr, "fake makemkvcon: %v\n", err)
+		return 2
+	}
 	src, err := newReader(m.ReadCounterFile)
 	if err != nil {
 		return fail(err)
 	}
-	out, err := os.Create(filepath.Join(dir, fmt.Sprintf("%s_t%02d.mkv", m.TitleName, title)))
+	out, err := os.Create(path)
 	if err != nil {
 		return fail(err)
 	}
 	defer out.Close()
-
-	fmt.Fprintf(stdout, "PRGT:5018,0,\"Saving to MKV file\"\n")
-	fmt.Fprintf(stdout, "PRGC:5018,0,\"Saving to MKV file\"\n")
 	if m.JunkLineBytes > 0 {
 		fmt.Fprintln(stdout, strings.Repeat("x", m.JunkLineBytes))
 	}

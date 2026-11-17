@@ -32,25 +32,27 @@ import (
 
 // fakeBackend holds a few jobs and records what the UI asked it to do.
 type fakeBackend struct {
-	jobs        map[int64]*jobs.Job
-	approved    []int
-	movie       *jobs.Movie
-	retried     int64
-	scanned     string
-	health      []app.Check
-	failNext    error
-	settings    *settings.Settings
-	trial       jobs.TrialTally
-	settingsErr error
-	posters     map[int]string // TMDb id → cached file
-	live        map[string]makemkv.Live
-	trays       map[string]drive.State
-	events      map[int64][]jobs.Event
-	active      []int64 // the active jobs; 1 and 2 if nil
-	discLangs   *settings.Languages
-	searched    string
-	bundles     map[string]string // diagnostics bundle name → folder
-	discIndex   *discdb.Index
+	jobs          map[int64]*jobs.Job
+	approved      []int
+	movie         *jobs.Movie
+	retried       int64
+	scanned       string
+	health        []app.Check
+	failNext      error
+	settings      *settings.Settings
+	trial         jobs.TrialTally
+	strategy      jobs.Strategy
+	retriedBackup int64
+	settingsErr   error
+	posters       map[int]string // TMDb id → cached file
+	live          map[string]makemkv.Live
+	trays         map[string]drive.State
+	events        map[int64][]jobs.Event
+	active        []int64 // the active jobs; 1 and 2 if nil
+	discLangs     *settings.Languages
+	searched      string
+	bundles       map[string]string // diagnostics bundle name → folder
+	discIndex     *discdb.Index
 }
 
 func newBackend() *fakeBackend {
@@ -107,12 +109,16 @@ func (f *fakeBackend) DiscInserted(_ context.Context, d string) (*jobs.Job, erro
 	f.scanned = d
 	return &jobs.Job{ID: 9}, nil
 }
-func (f *fakeBackend) Approve(_ context.Context, id int64, titles []int, m *jobs.Movie, l *settings.Languages) error {
+func (f *fakeBackend) Approve(_ context.Context, id int64, titles []int, m *jobs.Movie, l *settings.Languages, s jobs.Strategy) error {
 	if f.failNext != nil {
 		return f.failNext
 	}
-	f.approved, f.movie, f.discLangs = titles, m, l
+	f.approved, f.movie, f.discLangs, f.strategy = titles, m, l, s
 	return nil
+}
+func (f *fakeBackend) RetryWithBackup(_ context.Context, id int64) error {
+	f.retriedBackup = id
+	return f.failNext
 }
 func (f *fakeBackend) SearchMovies(_ context.Context, term string) ([]jobs.Movie, error) {
 	f.searched = term
@@ -1107,5 +1113,70 @@ func TestApproveWithoutAMovieSaysHowToChooseOne(t *testing.T) {
 	resp, body := do(t, srv, "POST", "/jobs/1/approve", url.Values{"title": {"0"}}, true, map[string]string{"Origin": srv.URL})
 	if resp.StatusCode != 422 || !strings.Contains(body, "search for it by name above the titles") {
 		t.Errorf("approve without a movie: %d; want 422 and how to choose the movie", resp.StatusCode)
+	}
+}
+
+// The Backup + remux choice (decision D69): offered on the review page and
+// on a rip's failure page for a Blu-ray disc, never for a DVD; it reaches
+// the backend as the strategy.
+func TestBackupAndRemuxChoice(t *testing.T) {
+	b := newBackend()
+	srv := newServer(t, b)
+	same := map[string]string{"Origin": srv.URL}
+	button := `name="strategy" value="backup"`
+	if _, body := get(t, srv, "/jobs/1"); !strings.Contains(body, button) {
+		t.Error("the review page doesn't offer backup + remux for a Blu-ray")
+	}
+	if resp, _ := do(t, srv, "POST", "/jobs/1/approve", url.Values{"title": {"0"}, "strategy": {"backup"}}, true, same); resp.StatusCode != 303 || b.strategy != jobs.Backup {
+		t.Errorf("approve with backup: %d, strategy %q", resp.StatusCode, b.strategy)
+	}
+	if do(t, srv, "POST", "/jobs/1/approve", url.Values{"title": {"0"}}, true, same); b.strategy != jobs.Unset {
+		t.Errorf("a plain approval: strategy %q; want unset, for the history to decide", b.strategy)
+	}
+
+	// Sent back by backup + remux (no room): the page says why, and its
+	// main button rips Direct.
+	b.jobs[1].Strategy, b.jobs[1].Note = jobs.Backup, "not enough free space for backup + remux: it needs about 165 GB"
+	_, body := get(t, srv, "/jobs/1")
+	if !strings.Contains(body, "Backup + remux couldn't start: not enough free space") || !strings.Contains(body, `name="strategy" value="direct"`) ||
+		strings.Contains(body, "Suggested because") {
+		t.Error("the page doesn't say why backup + remux sent the job back, or offer a direct rip")
+	}
+	if do(t, srv, "POST", "/jobs/1/approve", url.Values{"title": {"0"}, "strategy": {"direct"}}, true, same); b.strategy != jobs.Direct {
+		t.Errorf("rip directly: strategy %q", b.strategy)
+	}
+	b.jobs[1].Strategy = jobs.Unset
+
+	dvd := &makemkv.Disc{Titles: []makemkv.Title{{Index: 0, SourceFile: "VTS_01_1.VOB", Duration: time.Hour}}}
+	b.jobs[1].Disc = dvd
+	if _, body := get(t, srv, "/jobs/1"); strings.Contains(body, button) {
+		t.Error("backup + remux offered for a DVD")
+	}
+
+	b.jobs[5] = &jobs.Job{ID: 5, Drive: "/dev/sr0", State: jobs.Failed, FailedIn: jobs.Ripping, Disc: newBackend().jobs[1].Disc,
+		Note: "rip failed: hung", UpdatedAt: time.Now()}
+	if _, body := get(t, srv, "/jobs/5"); !strings.Contains(body, `action="/jobs/5/retry-backup"`) {
+		t.Error("the failure page doesn't offer backup + remux")
+	}
+	if _, body := get(t, srv, "/jobs/3"); strings.Contains(body, "retry-backup") {
+		t.Error("backup + remux offered for a job that failed verifying")
+	}
+	if resp, _ := do(t, srv, "POST", "/jobs/5/retry-backup", url.Values{}, true, same); resp.StatusCode != 303 || b.retriedBackup != 5 {
+		t.Errorf("retry with backup: %d, %d", resp.StatusCode, b.retriedBackup)
+	}
+}
+
+// A backup and its remux show like a rip: the progress bar and the step's
+// own words.
+func TestBackingUpShowsProgress(t *testing.T) {
+	b := newBackend()
+	b.jobs[2].State = jobs.BackingUp
+	srv := newServer(t, b)
+	if _, body := get(t, srv, "/jobs/2"); !strings.Contains(body, "Backing up the disc 42%") || !strings.Contains(body, `<progress`) {
+		t.Error("a backup's page has no progress")
+	}
+	b.jobs[2].State = jobs.Remuxing
+	if _, body := get(t, srv, "/jobs/2"); !strings.Contains(body, "Remuxing 42%") || strings.Contains(body, "measuring") {
+		t.Error("a remux's page: wrong words, or a speed it can't have")
 	}
 }

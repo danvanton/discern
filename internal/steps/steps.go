@@ -15,6 +15,7 @@ import (
 	"github.com/danvanton/discern/internal/discdb"
 	"github.com/danvanton/discern/internal/importer"
 	"github.com/danvanton/discern/internal/jobs"
+	"github.com/danvanton/discern/internal/lang"
 	"github.com/danvanton/discern/internal/makemkv"
 	"github.com/danvanton/discern/internal/settings"
 )
@@ -65,6 +66,12 @@ type Steps struct {
 	// HasMovie reports whether Radarr already has a file for the movie
 	// (decision D61). New sets it to Radarr's; tests replace it.
 	HasMovie func(ctx context.Context, tmdbID int) (bool, error)
+	// Mkvmerge is mkvmerge's path, for the Backup + remux strategy; ""
+	// when it isn't installed, and then a backup can't be remuxed.
+	Mkvmerge string
+	// Languages, if set, returns the track choice for j's rip, as the
+	// remux applies it (decision D70); nil keeps every track.
+	Languages func(ctx context.Context, j *jobs.Job) (*lang.Choice, error)
 
 	info func(ctx context.Context, drive string) (*makemkv.Disc, error) // runner.Info; tests replace it
 

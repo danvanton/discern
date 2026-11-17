@@ -60,7 +60,7 @@ func NewRunner(bin string) *Runner {
 // ExitError reports a makemkvcon run that ended with a non-zero exit status.
 // Messages are MakeMKV's own, the best clue to what went wrong.
 type ExitError struct {
-	Op       string // "info" or "mkv"
+	Op       string // "info", "mkv" or "backup"
 	Code     int
 	Messages []Message
 	Stderr   string
@@ -155,18 +155,45 @@ type RipResult struct {
 // Rip saves one title of the disc in device as MKV into outDir. outDir must
 // be empty (it is created if missing): the watchdog measures output as the
 // size of everything in it, so leftovers from an earlier attempt would look
-// like progress, and would be mixed up with this rip's files.
+// like progress, and would be mixed up with this rip's files. Progress and
+// the watchdog work as watched says.
+func (r *Runner) Rip(ctx context.Context, device string, title int, outDir string, onProgress func(Progress)) (*RipResult, error) {
+	msgs, err := r.watched(ctx, "mkv", device, outDir, onProgress,
+		"-r", "--progress=-same", "--minlength=0", "mkv", "dev:"+device, strconv.Itoa(title), outDir)
+	if err != nil {
+		return nil, err
+	}
+	files, err := filepath.Glob(filepath.Join(outDir, "*.mkv"))
+	if err != nil {
+		return nil, err
+	}
+	return &RipResult{OutputFiles: files, Messages: msgs}, nil
+}
+
+// Backup copies the disc in device, decrypted, into outDir (makemkvcon
+// backup --decrypt), for the Backup + remux strategy (DESIGN section 9.3).
+// outDir must be empty, as for Rip, and the watchdog watches it the same
+// way: a backup that stops growing while the drive reads is stalled. It
+// returns MakeMKV's messages.
+func (r *Runner) Backup(ctx context.Context, device, outDir string, onProgress func(Progress)) ([]Message, error) {
+	return r.watched(ctx, "backup", device, outDir, onProgress,
+		"-r", "--progress=-same", "backup", "--decrypt", "dev:"+device, outDir)
+}
+
+// watched runs makemkvcon with args, writing into outDir, under the
+// watchdog, and returns MakeMKV's messages once it exits cleanly. op names
+// the command in errors.
 //
 // onProgress, if not nil, is called from another goroutine with the latest
 // progress. Progress lines are never queued behind a slow callback: values
 // that arrive while it runs are replaced by newer ones, so a slow callback
-// can't hold up makemkvcon. Rip returns only after the last callback has
-// returned.
+// can't hold up makemkvcon. watched returns only after the last callback
+// has returned.
 //
 // The watchdog samples the process every Watchdog.Interval. On a stall or
-// hang it saves the evidence, stops the process, and Rip returns a
+// hang it saves the evidence, stops the process, and watched returns a
 // *WatchdogError.
-func (r *Runner) Rip(ctx context.Context, device string, title int, outDir string, onProgress func(Progress)) (*RipResult, error) {
+func (r *Runner) watched(ctx context.Context, op, device, outDir string, onProgress func(Progress), args ...string) ([]Message, error) {
 	if err := r.Watchdog.Validate(); err != nil {
 		return nil, err
 	}
@@ -175,8 +202,7 @@ func (r *Runner) Rip(ctx context.Context, device string, title int, outDir strin
 	}
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
-	cmd := r.command(runCtx, "-r", "--progress=-same", "--minlength=0",
-		"mkv", "dev:"+device, strconv.Itoa(title), outDir)
+	cmd := r.command(runCtx, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -239,17 +265,13 @@ loop:
 		return nil, werr
 	case waitErr == nil && readErr == nil:
 		// A clean exit counts, even if ctx was cancelled a moment later.
-		files, err := filepath.Glob(filepath.Join(outDir, "*.mkv"))
-		if err != nil {
-			return nil, err
-		}
-		return &RipResult{OutputFiles: files, Messages: out.messages()}, nil
+		return out.messages(), nil
 	case ctx.Err() != nil:
-		return nil, fmt.Errorf("makemkvcon mkv: %w", ctx.Err())
+		return nil, fmt.Errorf("makemkvcon %s: %w", op, ctx.Err())
 	case readErr != nil:
 		return nil, fmt.Errorf("reading makemkvcon output: %w", readErr)
 	default:
-		return nil, exitError("mkv", waitErr, out.messages(), stderr.String())
+		return nil, exitError(op, waitErr, out.messages(), stderr.String())
 	}
 }
 

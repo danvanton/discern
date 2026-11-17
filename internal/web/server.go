@@ -51,7 +51,10 @@ type Backend interface {
 	DriveList() []string
 	Pending(drive string) bool
 	DiscInserted(ctx context.Context, drive string) (*jobs.Job, error)
-	Approve(ctx context.Context, id int64, titles []int, movie *jobs.Movie, langs *settings.Languages) error
+	Approve(ctx context.Context, id int64, titles []int, movie *jobs.Movie, langs *settings.Languages, s jobs.Strategy) error
+	// RetryWithBackup rips a job that failed ripping again with Backup +
+	// remux (D69).
+	RetryWithBackup(ctx context.Context, id int64) error
 	SearchMovies(ctx context.Context, term string) ([]jobs.Movie, error)
 	Retry(ctx context.Context, id int64) error
 	Cancel(ctx context.Context, id int64) error
@@ -118,6 +121,7 @@ func New(b Backend, opt Options) (http.Handler, error) {
 	mux.HandleFunc("GET /fragments/health", s.healthFragment)
 	mux.HandleFunc("POST /jobs/{id}/approve", s.approve)
 	mux.HandleFunc("POST /jobs/{id}/retry", s.action(b.Retry))
+	mux.HandleFunc("POST /jobs/{id}/retry-backup", s.action(b.RetryWithBackup))
 	mux.HandleFunc("POST /jobs/{id}/cancel", s.action(b.Cancel))
 	mux.HandleFunc("POST /drives/scan", s.scanDrive)
 	mux.HandleFunc("GET /settings", s.settingsPage)
@@ -567,7 +571,14 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.b.Approve(r.Context(), j.ID, titles, movie, discLanguages(r.PostForm)); err != nil {
+	strategy := jobs.Unset // the strategy history decides (D66)
+	switch r.PostForm.Get("strategy") {
+	case "backup":
+		strategy = jobs.Backup // "Rip with backup + remux" (D69)
+	case "direct":
+		strategy = jobs.Direct // "Rip directly", after backup + remux couldn't start
+	}
+	if err := s.b.Approve(r.Context(), j.ID, titles, movie, discLanguages(r.PostForm), strategy); err != nil {
 		msg := err.Error()
 		if errors.Is(err, jobs.ErrNoMovie) {
 			// Worded here, where the form is: the engine doesn't know the page.

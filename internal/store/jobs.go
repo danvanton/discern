@@ -20,7 +20,7 @@ import (
 // check that.
 var _ jobs.Store = (*Store)(nil)
 
-const jobColumns = `id, drive, state, disc, movie, titles, selection, languages, failure, note, failed_in, progress, created_at, updated_at`
+const jobColumns = `id, drive, state, disc, movie, titles, selection, languages, failure, note, failed_in, strategy, progress, created_at, updated_at`
 
 func (s *Store) CreateJob(ctx context.Context, drive string) (*jobs.Job, error) {
 	now := s.now()
@@ -117,6 +117,27 @@ func (s *Store) RecentJobs(ctx context.Context, limit int) ([]*jobs.Job, error) 
 	return out, rows.Err()
 }
 
+// RecordAttempt adds a rip attempt to the strategy history (decision D66).
+func (s *Store) RecordAttempt(ctx context.Context, a jobs.Attempt) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO rip_attempts (disc, makemkv, strategy, result, job_id, at) VALUES (?, ?, ?, ?, ?, ?)`,
+		a.Disc, a.MakeMKV, a.Strategy, a.Result, a.JobID, ms(s.now()))
+	return err
+}
+
+// LastResult returns the latest attempt's result for a disc, MakeMKV
+// version and strategy, or "" if there was none.
+func (s *Store) LastResult(ctx context.Context, disc, makemkv string, st jobs.Strategy) (string, error) {
+	var result string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT result FROM rip_attempts WHERE disc = ? AND makemkv = ? AND strategy = ? ORDER BY id DESC LIMIT 1`,
+		disc, makemkv, st).Scan(&result)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return result, err
+}
+
 // Ping checks the database answers, for the health check.
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 
@@ -186,9 +207,9 @@ func (s *Store) Move(ctx context.Context, j *jobs.Job, to jobs.State, note strin
 	// so a Move from an older copy of the job can't undo a newer value.
 	res, err := tx.ExecContext(ctx, `UPDATE jobs
 		SET state = ?, disc = ?, movie = ?, titles = ?, selection = ?, languages = ?, failure = ?, note = ?, failed_in = ?,
-		    updated_at = ?
+		    strategy = ?, updated_at = ?
 		WHERE id = ? AND state = ?`,
-		to, disc, movie, string(titles), selection, langs, failure, j.Note, j.FailedIn, ms(now),
+		to, disc, movie, string(titles), selection, langs, failure, j.Note, j.FailedIn, j.Strategy, ms(now),
 		j.ID, j.State)
 	if isUniqueViolation(err) {
 		return fmt.Errorf("%w: %s", jobs.ErrDriveBusy, j.Drive)
@@ -267,7 +288,7 @@ func scanJob(row interface{ Scan(...any) error }) (*jobs.Job, error) {
 	var titles string
 	var created, updated int64
 	if err := row.Scan(&j.ID, &j.Drive, &j.State, &disc, &movie, &titles, &selection, &langs, &failure,
-		&j.Note, &j.FailedIn, &j.Progress, &created, &updated); err != nil {
+		&j.Note, &j.FailedIn, &j.Strategy, &j.Progress, &created, &updated); err != nil {
 		return nil, err
 	}
 	if !j.State.Valid() {

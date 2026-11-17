@@ -1,6 +1,6 @@
 # Discern: design
 
-**Status:** draft, 2026-11-13. Decisions D1–D26 were accepted by the owner on 2026-11-13 and 14, and D27 to D69 on 2026-11-15 and 16. A new decision starts as **Proposed** and becomes **Accepted** once the owner approves it. The decision log (section 17) holds the reasons.
+**Status:** draft, 2026-11-13. Decisions D1–D26 were accepted by the owner on 2026-11-13 and 14, and D27 to D71 on 2026-11-15 to 17. A new decision starts as **Proposed** and becomes **Accepted** once the owner approves it. The decision log (section 17) holds the reasons.
 
 Discern turns a disc in a drive into a correctly named file in your library, with no clicks when it is sure and one question when it is not. It runs MakeMKV, works out which titles on the disc are the movie or the episodes, rips only those, and hands them to Radarr or Sonarr, or files them itself.
 
@@ -252,8 +252,9 @@ stateDiagram-v2
     NeedsYou --> Cancelled
     Ripping --> Verifying
     Ripping --> Stalled: watchdog
-    Stalled --> BackingUp: enough free space
-    Stalled --> NeedsYou: not enough space
+    Ripping --> BackingUp: chosen, or stalled before
+    Stalled --> BackingUp
+    BackingUp --> NeedsYou: not enough space
     BackingUp --> Remuxing
     Remuxing --> Verifying
     Verifying --> Importing
@@ -263,6 +264,8 @@ stateDiagram-v2
     Importing --> Done
     Scanning --> Failed
     Ripping --> Failed
+    BackingUp --> Failed
+    Remuxing --> Failed
     Verifying --> Failed
     Importing --> Failed
     Failed --> Ripping: retry
@@ -282,7 +285,7 @@ stateDiagram-v2
 
 ### How it is built (v0.1)
 
-- **The state machine is a table.** `internal/jobs/state.go` lists, for each state, the states it may move to. The engine refuses any other move. v0.1 has the states up to `Done`, `Failed` and `Cancelled`; the recovery states (`Stalled`, `BackingUp`, …) are added with the fallback in v0.2.
+- **The state machine is a table.** `internal/jobs/state.go` lists, for each state, the states it may move to. The engine refuses any other move. v0.1 had the states up to `Done`, `Failed` and `Cancelled`; v0.2 adds `Stalled`, `BackingUp` and `Remuxing` for the fallback (decision D65). `WaitingForSet` and `Joining` come with multi-disc movies.
 - **Every step is safe to run again,** so recovery needs no special code. After a restart, the engine runs the step that the saved state names:
   - Scan, identify, select and verify only read.
   - Ripping always starts by emptying the job's staging folder.
@@ -492,6 +495,16 @@ The second route skips MakeMKV's muxer entirely. Opening the backup in MakeMKV i
 - **Languages.** The remux keeps the same tracks a Direct rip would, through `mkvmerge`'s track options (decision D67).
 - **Strategy history.** Each attempt is stored in SQLite: disc fingerprint (TheDiscDB `ContentHash` or a hash of the title shapes), MakeMKV version, strategy, result. A newer MakeMKV version resets the "known bad" mark, so Discern tries Direct again after an upgrade.
 - **Clean-up.** The backup folder is deleted after the remuxed file is verified. It sits in staging, never in the library.
+
+**How it is built (v0.2).**
+
+- **The engine** (`internal/jobs`). A rip the watchdog calls stalled moves the job to `Stalled`, with the strategy set to Backup and the stall's diagnostics bundle kept. `Stalled` moves straight on to `BackingUp`, so the event shows in the job's history. A hung rip still fails: nothing is coming in, so a backup won't help. The `Ripping` step also diverts to `BackingUp` when the job's strategy is Backup (chosen by the user), or when nobody chose (a plain approval, auto-import) and the history says Direct stalled on this disc before; a Direct the user chose is never overridden. `BackingUp` asks `Steps.Fallback` first: mkvmerge must be installed and every chosen title must come from a Blu-ray playlist or clip. If the route can't run, the job fails as a failed rip with Direct chosen, so Retry tries Direct again. Short of space, the job waits in `NeedsYou`: the review page says how much is missing, and its main button becomes "Rip directly". A retry that rescans forgets the strategy. Then the disc is checked, the staging folder emptied, and `makemkvcon backup --decrypt` writes `<staging>/<job>/backup`. `Remuxing` deletes any partial MKV, keeps the complete backup, and runs mkvmerge. After a crash, `BackingUp` starts its backup again, and `Remuxing` only remuxes again.
+- **The backup** (`makemkv.Runner.Backup`) shares the rip's watched run, so the watchdog, the diagnostics bundle and the live speeds work for it too.
+- **The remux** (`steps.Remux`). mkvmerge reads the chosen title's playlist (or clip) from the backup's `BDMV` folder, which MakeMKV writes at the top or one level down. If there is no `BDMV` folder, the remux stops with an error rather than guessing. mkvmerge v81+ merges a dual-layer Dolby Vision title's enhancement layer into the video track, as MakeMKV does; the image has v92. Tracks are chosen by the language rule on mkvmerge's own list (decision D70), and progress comes from mkvmerge's GUI mode. Exit status 1 (warnings) still counts as written. The source and output file names come from the disc, so they are checked before they become paths.
+- **The history** (migration 006, `rip_attempts`). Every Direct and Backup attempt is recorded with its result, keyed by `makemkv.Disc.Fingerprint` (decision D71) and MakeMKV's pinned version (`Engine.MakeMKVVersion`). A rip starts with Backup when the latest Direct attempt on the same disc and version stalled.
+- **By hand** (decision D69). The review page has "Rip with backup + remux" beside "Rip and import", and a rip's failure page has it beside Retry. Both appear only for a disc whose titles come from Blu-ray playlists.
+- **Without a drive.** `cmd/fake-mkvmerge` (as `mkvmerge` on the `PATH`) and the fake makemkvcon's `backup` scenario run the whole route on any machine. Tests use the test binaries as both fakes. A real stall is only told apart from a hang where `/proc` gives the read counter, so the stall-to-fallback test runs on Linux (CI) only.
+- **Not yet seen on a real disc.** Still to check on one: what MakeMKV's backup writes, the remuxed file's Dolby Vision (`mkvmerge -J`), and whether the stall's disc finishes this way.
 
 ---
 
@@ -720,6 +733,8 @@ Recordings come from real discs. When a disc behaves oddly in real use, its scan
 | D67 | **The remux keeps the same languages as a Direct rip**, through `mkvmerge`'s track options, chosen from the scan's streams by the same rule | Accepted (2026-11-16) | The file shouldn't depend on which route made it, and Verify's track check covers both. | Keep every track in a fallback rip |
 | D68 | **The fallback's space check allows for the whole disc**: the largest the disc could be (100 GB for a UHD, 50 GB for a Blu-ray), plus the title and a margin. DESIGN said "twice the title's size", but `makemkvcon backup` copies the whole disc, extras included | Accepted (2026-11-16) | Fail closed: a check that undercounts wastes an hour's backup that runs out of space. Running out mid-backup is still an error, never a bad import. | Twice the title plus 10 GB (closer, but undercounts discs with heavy extras) |
 | D69 | **A "Rip with backup + remux" choice on the review and failure pages** | Accepted (2026-11-16) | An escape hatch for odd discs, and the way to prove the route on a disc that doesn't stall. | The fallback after a stall only |
+| D70 | **The remux applies the language rule to mkvmerge's own track list** (how D67 works): video always; audio and subtitles in the chosen languages, plus tracks with no language; a title with no audio in them keeps its own. Commentary in a kept language is kept, and "forced only" keeps the whole subtitle track, since mkvmerge can't tell either apart; the job's note says so. With no languages chosen, every track is kept | Accepted (2026-11-17) | MakeMKV's scan doesn't line up with the disc's tracks: it lists each PGS subtitle twice (the track and a "forced only" copy it builds) and marks commentary by name. mkvmerge sees only the disc's tracks and their languages. Matching the two would guess at MakeMKV's ordering, and a mismatch would have to stop a fallback that otherwise works. Verify's lossless-track check still applies. | Match MakeMKV's streams to mkvmerge's tracks one by one, pairing the doubled subtitles back up, to carry the commentary flags (closer to Direct, but fragile, and failing closed on any mismatch) |
+| D71 | **The strategy history knows a disc by a hash of its title shapes** (each title's playlist, segment map, length and size: what the disc check compares), not by its TheDiscDB release (corrects D66) | Accepted (2026-11-17) | A TheDiscDB release isn't one disc: the owner's 2021 Star Trek set has a UHD and a Blu-ray disc under one release name. The hash identifies exactly this pressing, known to TheDiscDB or not. | The release plus the disc's format, with the hash for unknown discs (readable, but two identical pressings in different sets wouldn't share history) |
 
 ---
 

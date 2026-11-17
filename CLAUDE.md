@@ -2,7 +2,7 @@
 
 Discern watches optical drives, works out which titles on a disc are the movie, rips them with MakeMKV (`makemkvcon`, run as a subprocess) and imports them into Radarr. It is written in Go 1.27 and is a single binary with a web UI.
 
-The design, every decision (D1–D69) and the reason for each are in `docs/DESIGN.md`. Read the relevant section before changing a part. When a change alters behaviour the design describes, update the design doc in the same change. New decisions get the next D-number in the decision log (section 17), marked Proposed until the owner accepts them.
+The design, every decision (D1–D71) and the reason for each are in `docs/DESIGN.md`. Read the relevant section before changing a part. When a change alters behaviour the design describes, update the design doc in the same change. New decisions get the next D-number in the decision log (section 17), marked Proposed until the owner accepts them.
 
 ## Layout
 
@@ -11,13 +11,13 @@ The design, every decision (D1–D69) and the reason for each are in `docs/DESIG
 | `cmd/discern` | the server: reads settings, wires the parts, shuts down within Docker's 10 s |
 | `cmd/discern-index` | builds the compact TheDiscDB index from a TheDiscDB checkout (decision D38) |
 | `cmd/discern-bench` | scores the selector on TheDiscDB's discs, leave-one-out; CI's gate (decisions D50, D51) |
-| `cmd/fake-makemkvcon`, `cmd/fake-radarr` | stand-ins for running the app without a drive or Radarr (README: "Try it without a drive") |
-| `internal/makemkv` | robot-output parser, the runner (`Info`, `Rip`) and the rip watchdog; the only package that knows MakeMKV |
-| `internal/makemkv/fake` | the fake makemkvcon (scenarios in the `FAKE_MAKEMKVCON` JSON variable) |
+| `cmd/fake-makemkvcon`, `cmd/fake-mkvmerge`, `cmd/fake-radarr` | stand-ins for running the app without a drive, mkvmerge or Radarr (README: "Try it without a drive") |
+| `internal/makemkv` | robot-output parser, the runner (`Info`, `Rip`, `Backup`) and the rip watchdog; the only package that knows MakeMKV |
+| `internal/makemkv/fake` | the fake makemkvcon (scenarios in the `FAKE_MAKEMKVCON` JSON variable) and the fake mkvmerge (`FAKE_MKVMERGE`) |
 | `internal/makemkv/install` | the first-start installer for `makemkvcon`, the key writer, and the MakeMKV pin (`pin.env`, the signed checksum file, the signing key) |
 | `internal/jobs` | job states (a transition table), the engine, and the `Store` and `Steps` interfaces it needs |
 | `internal/store` | SQLite (pure-Go driver), migrations in `migrations/*.sql` |
-| `internal/steps` | the real `jobs.Steps`: scan, check disc, select (calls `selector`), rip, verify, import |
+| `internal/steps` | the real `jobs.Steps`: scan, check disc, select (calls `selector`), rip, backup and remux (D64-D70), verify, import |
 | `internal/radarr` | Radarr v3 API client; `radarrtest` is an in-memory fake Radarr |
 | `internal/importer` | Radarr import flow and the staging `PathMap` |
 | `internal/discdb` | TheDiscDB's movie discs as a compact index, signed (D59); matching a scan to a known disc by shape (D39, D46) |
@@ -48,7 +48,7 @@ go test -race -count=1 ./...     # needs cgo; CI runs it
 gofmt -l .                       # must print nothing
 ```
 
-- Tests that start makemkvcon re-run the test binary as the fake (see `TestMain` in `internal/makemkv`, `internal/steps` and `internal/app`). There is no separate build step.
+- Tests that start makemkvcon or mkvmerge re-run the test binary as the fake (see `TestMain` in `internal/makemkv`, `internal/steps` and `internal/app`). There is no separate build step.
 - The Linux-only tests (`*_linux_test.go`, and the `/proc` watchdog test) skip or don't build elsewhere. Only CI on Linux runs them.
 - Timing-based tests (the watchdog, the runner) should pass many runs in a row. Run new ones 5–8 times before calling them done.
 

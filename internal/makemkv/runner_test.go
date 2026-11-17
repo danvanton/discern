@@ -439,3 +439,48 @@ func TestIncompleteScanErrorCountsAndBoundsMessages(t *testing.T) {
 		t.Errorf("read errors without skipped titles or a not-ready drive failed the scan: %v", err)
 	}
 }
+
+// A backup writes the disc's folder (BDMV with its playlists and streams)
+// into an empty folder, with progress, and returns MakeMKV's messages.
+func TestBackupHealthy(t *testing.T) {
+	r := testRunner(t, fake.Scenario{Backup: fake.Backup{
+		Mkv: fake.Mkv{TotalBytes: 2 * mib, ChunkDelayMs: 1}, Playlists: []string{"00800.mpls"}}})
+	out := filepath.Join(t.TempDir(), "backup")
+	var progress atomic.Int32
+
+	msgs, err := r.Backup(context.Background(), "/dev/sr0", out, func(Progress) { progress.Add(1) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "BDMV", "PLAYLIST", "00800.mpls")); err != nil {
+		t.Errorf("no playlist in the backup: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(out, "BDMV", "STREAM", "00000.m2ts")); err != nil || info.Size() != 2*mib {
+		t.Errorf("stream file: %v, %v; want %d bytes", info, err, 2*mib)
+	}
+	if progress.Load() == 0 || len(msgs) == 0 {
+		t.Errorf("%d progress lines, %d messages", progress.Load(), len(msgs))
+	}
+}
+
+// A backup is watched like a rip, and its errors name the backup.
+func TestBackupStallAndExitError(t *testing.T) {
+	counter := filepath.Join(t.TempDir(), "read-counter")
+	r := testRunner(t, fake.Scenario{Backup: fake.Backup{Mkv: fake.Mkv{
+		TotalBytes: 100 * mib, StallAtBytes: 1 * mib, ChunkDelayMs: 2,
+		StallMode: fake.StallReading, ReadCounterFile: counter,
+	}}})
+	r.readCounter = counterFileReader(counter)
+	_, err := r.Backup(context.Background(), "/dev/sr0", t.TempDir(), nil)
+	var we *WatchdogError
+	if !errors.As(err, &we) || we.Verdict != Stalled {
+		t.Errorf("a stalled backup: %v", err)
+	}
+
+	r = testRunner(t, fake.Scenario{Backup: fake.Backup{Mkv: fake.Mkv{TotalBytes: 64 << 10, ExitCode: 3}}})
+	_, err = r.Backup(context.Background(), "/dev/sr0", t.TempDir(), nil)
+	var ee *ExitError
+	if !errors.As(err, &ee) || ee.Code != 3 || ee.Op != "backup" {
+		t.Errorf("err = %v, want *ExitError from backup with code 3", err)
+	}
+}

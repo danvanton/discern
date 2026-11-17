@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -35,6 +36,9 @@ import (
 func TestMain(m *testing.M) {
 	if os.Getenv(fake.EnvVar) != "" {
 		os.Exit(fake.Main(os.Args[1:], os.Stdout, os.Stderr))
+	}
+	if os.Getenv(fake.MkvmergeEnvVar) != "" {
+		os.Exit(fake.Mkvmerge(os.Args[1:], os.Stdout, os.Stderr))
 	}
 	os.Exit(m.Run())
 }
@@ -63,6 +67,8 @@ TINFO:1,27,0,"The Matrix_t01.mkv"
 
 type world struct {
 	app     *App
+	runner  *makemkv.Runner
+	steps   *steps.Steps
 	store   *store.Store
 	radarr  *radarrtest.Server
 	staging string
@@ -116,7 +122,7 @@ func newWorld(t *testing.T, ripDelay int, db string) *world {
 	a.MakeMKVSettings = filepath.Join(dir, "settings.conf")
 	jobSteps.BeforeRip = a.ApplyLanguages
 	a.ConnectSelect(jobSteps)
-	return &world{app: a, store: st, radarr: fr, staging: staging, db: db, cancel: cancel}
+	return &world{app: a, runner: runner, steps: jobSteps, store: st, radarr: fr, staging: staging, db: db, cancel: cancel}
 }
 
 // waitFor polls the job until it reaches state, or fails the test.
@@ -157,7 +163,7 @@ func TestADiscGoesFromTrayToRadarr(t *testing.T) {
 		t.Errorf("suggested titles %v, want [0] (the longest)", waiting.Titles)
 	}
 
-	if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil, nil); err != nil {
+	if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil, nil, jobs.Direct); err != nil {
 		t.Fatal(err)
 	}
 	w.waitFor(t, j.ID, jobs.Done)
@@ -182,7 +188,7 @@ func TestShutdownMidRipThenRestartFinishesTheJob(t *testing.T) {
 	ctx := context.Background()
 	j, _ := w.app.DiscInserted(ctx, "/dev/sr0")
 	waiting := w.waitFor(t, j.ID, jobs.NeedsYou)
-	w.app.Approve(ctx, j.ID, waiting.Titles, nil, nil)
+	w.app.Approve(ctx, j.ID, waiting.Titles, nil, nil, jobs.Direct)
 	w.waitFor(t, j.ID, jobs.Ripping)
 	time.Sleep(150 * time.Millisecond) // part-way through
 
@@ -227,7 +233,7 @@ func TestEjectOnlyWhenDone(t *testing.T) {
 		ctx := context.Background()
 		j, _ := w.app.DiscInserted(ctx, "/dev/sr0")
 		waiting := w.waitFor(t, j.ID, jobs.NeedsYou)
-		w.app.Approve(ctx, j.ID, waiting.Titles, nil, nil)
+		w.app.Approve(ctx, j.ID, waiting.Titles, nil, nil, jobs.Direct)
 		want := jobs.Done
 		if fail {
 			want = jobs.Failed
@@ -253,7 +259,7 @@ func TestADiscInsertedWhileBusyStartsLater(t *testing.T) {
 	ctx := context.Background()
 	first, _ := w.app.DiscInserted(ctx, "/dev/sr0")
 	waiting := w.waitFor(t, first.ID, jobs.NeedsYou)
-	if err := w.app.Approve(ctx, first.ID, waiting.Titles, nil, nil); err != nil {
+	if err := w.app.Approve(ctx, first.ID, waiting.Titles, nil, nil, jobs.Direct); err != nil {
 		t.Fatal(err)
 	}
 	w.waitFor(t, first.ID, jobs.Ripping)
@@ -340,7 +346,7 @@ func TestARemovedDiscForgetsAQueuedDisc(t *testing.T) {
 	ctx := context.Background()
 	first, _ := w.app.DiscInserted(ctx, "/dev/sr0")
 	waiting := w.waitFor(t, first.ID, jobs.NeedsYou)
-	if err := w.app.Approve(ctx, first.ID, waiting.Titles, nil, nil); err != nil {
+	if err := w.app.Approve(ctx, first.ID, waiting.Titles, nil, nil, jobs.Direct); err != nil {
 		t.Fatal(err)
 	}
 	w.waitFor(t, first.ID, jobs.Ripping)
@@ -383,7 +389,7 @@ func (w *world) rip(t *testing.T, want jobs.State) *jobs.Job {
 		t.Fatal(err)
 	}
 	waiting := w.waitFor(t, j.ID, jobs.NeedsYou)
-	if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil, nil); err != nil {
+	if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil, nil, jobs.Direct); err != nil {
 		t.Fatal(err)
 	}
 	done := w.waitFor(t, j.ID, want)
@@ -467,7 +473,7 @@ func TestADiscsOwnLanguagesAreUsedForItsRip(t *testing.T) {
 	}
 	waiting := w.waitFor(t, j.ID, jobs.NeedsYou)
 	disc := &settings.Languages{Audio: []string{"jpn"}, Subtitles: []string{"eng"}, ForcedOnly: true}
-	if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil, disc); err != nil {
+	if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil, disc, jobs.Direct); err != nil {
 		t.Fatal(err)
 	}
 	done := w.waitFor(t, j.ID, jobs.Done)
@@ -498,7 +504,7 @@ func TestApproveRefusesBadDiscLanguages(t *testing.T) {
 	j, _ := w.app.DiscInserted(ctx, "/dev/sr0")
 	waiting := w.waitFor(t, j.ID, jobs.NeedsYou)
 	for _, bad := range []*settings.Languages{{}, {Audio: []string{"xx"}}, {Audio: []string{"eng", "eng"}}} {
-		if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil, bad); err == nil {
+		if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil, bad, jobs.Direct); err == nil {
 			t.Errorf("languages %+v were accepted", bad)
 		}
 	}
@@ -628,5 +634,46 @@ func TestAutoImportEndToEnd(t *testing.T) {
 	got = w.waitFor(t, again.ID, jobs.NeedsYou)
 	if got.Selection == nil || got.Selection.Wait != "Radarr already has The Matrix (1999)" {
 		t.Errorf("Radarr has it: %+v", got.Selection)
+	}
+}
+
+// fallbackScenario is the fake makemkvcon for the Backup + remux route:
+// the world's scan, a rip that stalls at 256 KiB while it keeps reading,
+// and a backup of the world disc's size.
+func fallbackScenario(t *testing.T, w *world) {
+	t.Helper()
+	scanFile := filepath.Join(t.TempDir(), "scan.txt")
+	os.WriteFile(scanFile, []byte(scan), 0o644)
+	sc, _ := json.Marshal(fake.Scenario{
+		Info:   fake.Info{File: scanFile},
+		Mkv:    fake.Mkv{TitleName: "The Matrix", TotalBytes: 64 << 20, StallAtBytes: 256 << 10, ChunkDelayMs: 2},
+		Backup: fake.Backup{Mkv: fake.Mkv{TotalBytes: 1 << 20, ChunkBytes: 64 << 10}, Playlists: []string{"00800.mpls", "00801.mpls"}},
+	})
+	w.runner.Env = []string{fake.EnvVar + "=" + string(sc)}
+	exe, _ := os.Executable()
+	w.steps.Mkvmerge = exe
+	t.Setenv(fake.MkvmergeEnvVar, "on")
+}
+
+// The manual route through the real steps (decision D69): approved with
+// backup + remux, the disc is backed up by makemkvcon and remuxed by
+// mkvmerge (both fakes), verified and imported, with no Direct rip.
+func TestBackupAndRemuxEndToEnd(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t, 0, "")
+	fallbackScenario(t, w)
+	j, _ := w.app.DiscInserted(ctx, "/dev/sr0")
+	waiting := w.waitFor(t, j.ID, jobs.NeedsYou)
+	if err := w.app.Approve(ctx, j.ID, waiting.Titles, nil, nil, jobs.Backup); err != nil {
+		t.Fatal(err)
+	}
+	w.waitFor(t, j.ID, jobs.Done)
+	events, _ := w.store.Events(ctx, j.ID)
+	var states []jobs.State
+	for _, e := range events {
+		states = append(states, e.To)
+	}
+	if !slices.Contains(states, jobs.BackingUp) || !slices.Contains(states, jobs.Remuxing) || len(w.radarr.Imports()) != 1 {
+		t.Errorf("states %v, %d imports", states, len(w.radarr.Imports()))
 	}
 }

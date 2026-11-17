@@ -23,6 +23,11 @@ type Job struct {
 	// Languages is this disc's own track choice, made on the review page
 	// (decision D34); nil means the Settings page's choice applies.
 	Languages *lang.Choice
+	// Strategy is how the titles get from the disc to MKV (section 9.3):
+	// Unset until someone chooses, when the strategy history decides;
+	// Direct or Backup once the user chose one, or Backup once a rip
+	// stalled or the history says Direct stalled on this disc before.
+	Strategy Strategy
 
 	// Why the job is waiting in NeedsYou, or why it failed, in one sentence
 	// for the UI.
@@ -104,6 +109,39 @@ type Selection struct {
 	// Wait says why auto-import, on or on trial, didn't act on this disc.
 	Wait string `json:"wait,omitempty"`
 }
+
+// Strategy is a rip strategy (DESIGN section 9.3, decision D11).
+type Strategy string
+
+const (
+	// Unset: nobody chose; the strategy history decides (decision D66),
+	// and Direct is tried unless it stalled on this disc before. The zero
+	// value: a plain approval, and auto-import.
+	Unset Strategy = ""
+	// Direct: makemkvcon mkv straight to MKV, chosen: the history doesn't
+	// override it.
+	Direct Strategy = "direct"
+	// Backup: makemkvcon backup copies the disc, then mkvmerge builds the
+	// MKVs from the chosen titles' playlists.
+	Backup Strategy = "backup"
+)
+
+// Attempt is one rip attempt in the strategy history (decisions D66, D71):
+// how it went for this disc with this MakeMKV version.
+type Attempt struct {
+	Disc     string // makemkv.Disc.Fingerprint
+	MakeMKV  string // MakeMKV's version; "" when unknown (a development makemkvcon)
+	Strategy Strategy
+	Result   string // AttemptOK, AttemptStalled or AttemptFailed
+	JobID    int64
+}
+
+// Attempt results.
+const (
+	AttemptOK      = "ok"
+	AttemptStalled = "stalled"
+	AttemptFailed  = "failed"
+)
 
 // TrialTally is how auto-import's trial has gone (decision D62): of the
 // discs it would have ripped on its own, how many the user approved the

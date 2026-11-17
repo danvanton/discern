@@ -236,13 +236,13 @@ func (a *App) withdrawWaiting(ctx context.Context, drive, reason string) bool {
 
 // Approve starts the rip of the chosen titles. langs, if not nil, is this
 // disc's own track choice (decision D34), checked like the Settings page's.
-func (a *App) Approve(ctx context.Context, id int64, titles []int, movie *jobs.Movie, langs *settings.Languages) error {
+func (a *App) Approve(ctx context.Context, id int64, titles []int, movie *jobs.Movie, langs *settings.Languages, s jobs.Strategy) error {
 	if langs != nil {
 		if err := langs.Validate(); err != nil {
 			return err
 		}
 	}
-	if err := a.engine.Approve(ctx, id, titles, movie, langs); err != nil {
+	if err := a.engine.Approve(ctx, id, titles, movie, langs, s); err != nil {
 		return err
 	}
 	// The user may have chosen a different movie: its poster is wanted now,
@@ -254,6 +254,16 @@ func (a *App) Approve(ctx context.Context, id int64, titles []int, movie *jobs.M
 
 func (a *App) Retry(ctx context.Context, id int64) error {
 	if err := a.engine.Retry(ctx, id); err != nil {
+		return err
+	}
+	a.start(id)
+	return nil
+}
+
+// RetryWithBackup rips a job that failed ripping again, with the Backup +
+// remux strategy (decision D69).
+func (a *App) RetryWithBackup(ctx context.Context, id int64) error {
+	if err := a.engine.RetryWithBackup(ctx, id); err != nil {
 		return err
 	}
 	a.start(id)

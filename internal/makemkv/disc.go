@@ -2,9 +2,12 @@ package makemkv
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"maps"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -45,6 +48,30 @@ type Title struct {
 
 	Streams []Stream
 	Attrs   map[Attr]string // every TINFO attribute, by number
+}
+
+// bluRaySource is a Blu-ray playlist or clip file name, as MakeMKV gives a
+// title's source.
+var bluRaySource = regexp.MustCompile(`^[0-9]{5}\.(mpls|m2ts)$`)
+
+// BluRaySource reports whether the title comes from a Blu-ray playlist or
+// clip ("00800.mpls", "00000.m2ts"), which mkvmerge can remux from a backup.
+// A DVD's titles don't. The name comes from the disc, so it is matched
+// exactly, never used as a path as it is.
+func (t Title) BluRaySource() bool { return bluRaySource.MatchString(strings.ToLower(t.SourceFile)) }
+
+// Fingerprint identifies the disc by its titles' shapes: each title's
+// playlist, segment map, length and size, the values the disc check
+// compares (decision D71). The same pressing gives the same fingerprint,
+// whatever MakeMKV calls its titles; the strategy history keys on it.
+func (d *Disc) Fingerprint() string {
+	h := sha256.New()
+	ts := slices.Clone(d.Titles)
+	slices.SortFunc(ts, func(a, b Title) int { return a.Index - b.Index })
+	for _, t := range ts {
+		fmt.Fprintf(h, "%d|%s|%s|%d|%d\n", t.Index, t.SourceFile, t.SegmentMap, t.Duration, t.SizeBytes)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // Stream is one video, audio or subtitle track of a title.

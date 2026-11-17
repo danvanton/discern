@@ -62,7 +62,7 @@ const (
 // it can take minutes, which would inflate the estimate for the whole rip.
 func timingFor(j *jobs.Job, events []jobs.Event, now, ripStart time.Time) timing {
 	switch j.State {
-	case jobs.Scanning, jobs.Ripping, jobs.Verifying, jobs.Importing:
+	case jobs.Scanning, jobs.Ripping, jobs.BackingUp, jobs.Remuxing, jobs.Verifying, jobs.Importing:
 	default:
 		return timing{}
 	}
@@ -70,12 +70,12 @@ func timingFor(j *jobs.Job, events []jobs.Event, now, ripStart time.Time) timing
 	if !ok {
 		return timing{}
 	}
-	if j.State == jobs.Ripping && ripStart.After(start) {
+	if (j.State == jobs.Ripping || j.State == jobs.BackingUp) && ripStart.After(start) {
 		start = ripStart
 	}
 	t := timing{Running: true, Elapsed: max(now.Sub(start), 0)}
 	p := j.Progress
-	if j.State == jobs.Ripping && t.Elapsed >= estimateAfter && p >= estimateFrom && p < 1 {
+	if copying(j.State) && t.Elapsed >= estimateAfter && p >= estimateFrom && p < 1 {
 		// What took Elapsed did share p, so share 1-p takes Elapsed*(1-p)/p.
 		t.Left = time.Duration(float64(t.Elapsed) * (1 - p) / p)
 		t.LeftKnown = true
@@ -130,7 +130,7 @@ var stepList = []struct {
 	timed  jobs.State
 }{
 	{"Read the disc", []jobs.State{jobs.Detected, jobs.Scanning, jobs.Identifying, jobs.Selecting, jobs.NeedsYou}, jobs.Scanning},
-	{"Rip", []jobs.State{jobs.Ripping}, jobs.Ripping},
+	{"Rip", []jobs.State{jobs.Ripping, jobs.Stalled, jobs.BackingUp, jobs.Remuxing}, jobs.Ripping},
 	{"Check the rip", []jobs.State{jobs.Verifying}, jobs.Verifying},
 	{"Import to Radarr", []jobs.State{jobs.Importing}, jobs.Importing},
 }
@@ -220,7 +220,8 @@ func (s *server) cardFor(ctx context.Context, j *jobs.Job, events []jobs.Event, 
 		}
 	}
 	var ripStart time.Time
-	if j.State == jobs.Ripping {
+	// makemkvcon's speeds, for a rip or a backup; mkvmerge reports none.
+	if j.State == jobs.Ripping || j.State == jobs.BackingUp {
 		if l, ok := s.b.Live(j.Drive); ok {
 			c.Live = &l
 			ripStart = l.Started

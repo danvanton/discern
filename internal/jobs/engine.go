@@ -37,7 +37,23 @@ type Steps interface {
 	Rip(ctx context.Context, j *Job, dir string, progress func(float64)) error
 	Verify(ctx context.Context, j *Job, dir string) error
 	Import(ctx context.Context, j *Job, dir string) error
+
+	// The Backup + remux strategy (DESIGN section 9.3).
+	//
+	// Fallback reports whether j can take it: nil, an error wrapping
+	// ErrNoRoom when the staging filesystem holding dir is short of space
+	// (the job then waits for the user), or why it can't (a DVD, no
+	// mkvmerge).
+	Fallback(ctx context.Context, j *Job, dir string) error
+	// Backup copies the disc into dir, which the engine has just emptied.
+	Backup(ctx context.Context, j *Job, dir string, progress func(float64)) error
+	// Remux builds j.Titles' MKVs in dir from the backup in backupDir. It
+	// returns a note when the language rule couldn't be followed exactly.
+	Remux(ctx context.Context, j *Job, backupDir, dir string, progress func(float64)) (string, error)
 }
+
+// backupFolder is the backup's folder inside a job's staging folder.
+const backupFolder = "backup"
 
 // Engine moves jobs through their states, one step at a time, saving after
 // each.
@@ -49,6 +65,9 @@ type Engine struct {
 
 	// ProgressEvery limits how often rip progress is written to the store.
 	ProgressEvery time.Duration
+	// MakeMKVVersion keys the strategy history (decision D66): a new
+	// version tries Direct again. "" for a development makemkvcon.
+	MakeMKVVersion string
 
 	mu      sync.Mutex
 	running map[int64]*run
@@ -108,7 +127,7 @@ func (e *Engine) Run(ctx context.Context, id int64) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := e.step(ctx, j); err != nil {
+		if err := e.step(ctx, j); err != nil && !errors.Is(err, errStop) {
 			return err
 		}
 	}
@@ -170,13 +189,20 @@ func (e *Engine) step(ctx context.Context, j *Job) error {
 		if err := e.store.SetProgress(ctx, j.ID, 0); err != nil {
 			return err
 		}
-		if err := e.steps.CheckDisc(ctx, j); err != nil {
-			if errors.Is(err, ErrDiscChanged) {
-				// The job's disc is gone: retrying it means starting over
-				// with a fresh scan, so it "failed in" Detected.
-				return e.failIn(ctx, j, Detected, "check disc", err)
-			}
-			return e.fail(ctx, j, "check disc", err)
+		// The Backup + remux route, chosen by the user (decision D69), or
+		// because Direct stalled on this disc before (decision D66). Its
+		// own step checks the disc.
+		if j.Strategy == Backup {
+			return e.move(ctx, j, BackingUp, "backup + remux")
+		}
+		// A chosen Direct is the user's call: only an unset strategy
+		// follows the history.
+		if j.Strategy == Unset && e.stalledBefore(ctx, j) {
+			j.Strategy = Backup
+			return e.move(ctx, j, BackingUp, "a rip of this disc stalled before with this MakeMKV version: backup + remux")
+		}
+		if err := e.checkDisc(ctx, j); err != nil {
+			return err
 		}
 		dir := e.StagingDir(j.ID)
 		// Start from an empty folder every time: whatever a crashed attempt
@@ -185,16 +211,92 @@ func (e *Engine) step(ctx context.Context, j *Job) error {
 			return e.fail(ctx, j, "clear staging", err)
 		}
 		if err := e.steps.Rip(ctx, j, dir, e.progressWriter(j.ID)); err != nil {
+			var dog *makemkv.WatchdogError
+			if ctx.Err() == nil && errors.As(err, &dog) && dog.Verdict == makemkv.Stalled {
+				// The fallback's case (decision D64): data came in and
+				// nothing came out. The diagnostics bundle stays with the
+				// job; the Backup step checks the route can be taken.
+				e.record(ctx, j, Direct, AttemptStalled)
+				j.Strategy, j.Failure = Backup, keepBundle(describe("rip", err))
+				return e.move(ctx, j, Stalled, "the rip stalled: trying backup + remux")
+			}
 			return e.fail(ctx, j, "rip", err)
 		}
+		e.record(ctx, j, Direct, AttemptOK)
 		if err := e.store.SetProgress(ctx, j.ID, 1); err != nil {
 			return err
 		}
 		return e.move(ctx, j, Verifying, "")
 
+	case Stalled:
+		return e.move(ctx, j, BackingUp, "")
+
+	case BackingUp:
+		if err := e.store.SetProgress(ctx, j.ID, 0); err != nil {
+			return err
+		}
+		if err := e.steps.Fallback(ctx, j, e.staging); err != nil {
+			if errors.Is(err, ErrNoRoom) {
+				// Freeing space is the user's to do (decision D68); approving
+				// again takes either route.
+				j.Note = err.Error()
+				return e.move(ctx, j, NeedsYou, j.Note)
+			}
+			// Retry tries Direct again: the route can't help this disc.
+			j.Strategy = Direct
+			return e.failIn(ctx, j, Ripping, "backup + remux", err)
+		}
+		if err := e.checkDisc(ctx, j); err != nil {
+			return err
+		}
+		dir := e.StagingDir(j.ID)
+		// Empty, as for a rip: a stalled rip's partial file, or a crashed
+		// backup, is never trusted.
+		if err := os.RemoveAll(dir); err != nil {
+			return e.fail(ctx, j, "clear staging", err)
+		}
+		if err := e.steps.Backup(ctx, j, filepath.Join(dir, backupFolder), e.progressWriter(j.ID)); err != nil {
+			if ctx.Err() == nil {
+				e.record(ctx, j, Backup, AttemptFailed)
+			}
+			return e.fail(ctx, j, "backup", err)
+		}
+		return e.move(ctx, j, Remuxing, "")
+
+	case Remuxing:
+		if err := e.store.SetProgress(ctx, j.ID, 0); err != nil {
+			return err
+		}
+		dir := e.StagingDir(j.ID)
+		// The backup is complete (the job got this far); a crashed remux's
+		// MKVs are not, so they go.
+		if err := removeMKVs(dir); err != nil {
+			return e.fail(ctx, j, "clear staging", err)
+		}
+		note, err := e.steps.Remux(ctx, j, filepath.Join(dir, backupFolder), dir, e.progressWriter(j.ID))
+		if err != nil {
+			if ctx.Err() == nil {
+				e.record(ctx, j, Backup, AttemptFailed)
+			}
+			return e.fail(ctx, j, "remux", err)
+		}
+		e.record(ctx, j, Backup, AttemptOK)
+		if err := e.store.SetProgress(ctx, j.ID, 1); err != nil {
+			return err
+		}
+		if note != "" {
+			j.Note = note
+		}
+		return e.move(ctx, j, Verifying, note)
+
 	case Verifying:
 		if err := e.steps.Verify(ctx, j, e.StagingDir(j.ID)); err != nil {
 			return e.fail(ctx, j, "verify", err)
+		}
+		// A backup is up to 100 GB: it goes once its MKVs are verified, not
+		// after the import.
+		if err := os.RemoveAll(filepath.Join(e.StagingDir(j.ID), backupFolder)); err != nil {
+			e.log.Warn("removing the backup", "job", j.ID, "err", err)
 		}
 		return e.move(ctx, j, Importing, "")
 
@@ -253,7 +355,7 @@ func (e *Engine) failIn(ctx context.Context, j *Job, resumeIn State, what string
 // A job can't be approved without a movie, because the import needs one.
 // langs, if not nil, is this disc's own track choice (decision D34); nil
 // leaves the Settings page's choice in charge.
-func (e *Engine) Approve(ctx context.Context, id int64, titles []int, movie *Movie, langs *lang.Choice) error {
+func (e *Engine) Approve(ctx context.Context, id int64, titles []int, movie *Movie, langs *lang.Choice, s Strategy) error {
 	j, err := e.store.Job(ctx, id)
 	if err != nil {
 		return err
@@ -280,8 +382,12 @@ func (e *Engine) Approve(ctx context.Context, id int64, titles []int, movie *Mov
 		agreed := sel.Movie != nil && sel.Movie.TMDbID == j.Movie.TMDbID && sameTitles(sel.Titles, titles)
 		sel.Agreed = &agreed
 	}
-	j.Titles, j.Note, j.Languages = slices.Clone(titles), "", langs
-	return e.move(ctx, j, Ripping, fmt.Sprintf("approved titles %v", titles))
+	j.Titles, j.Note, j.Languages, j.Strategy = slices.Clone(titles), "", langs, s
+	note := fmt.Sprintf("approved titles %v", titles)
+	if s == Backup {
+		note += " with backup + remux"
+	}
+	return e.move(ctx, j, Ripping, note)
 }
 
 // Retry puts a failed job back to the step that failed. Steps after the scan
@@ -296,11 +402,29 @@ func (e *Engine) Retry(ctx context.Context, id int64) error {
 		return fmt.Errorf("job %d is %s, not failed", id, j.State)
 	}
 	to := Detected
-	if j.FailedIn == Ripping || j.FailedIn == Verifying || j.FailedIn == Importing {
+	switch j.FailedIn {
+	case Ripping, BackingUp, Remuxing, Verifying, Importing:
 		to = j.FailedIn
+	default:
+		j.Strategy = Unset // a fresh scan may find another disc
 	}
 	j.FailedIn, j.Note, j.Failure = "", "", keepBundle(j.Failure)
 	return e.move(ctx, j, to, "retry")
+}
+
+// RetryWithBackup puts a job that failed ripping back to rip with the
+// Backup + remux strategy (decision D69): the choice on the failure page
+// for a rip that failed for any reason, not only a stall.
+func (e *Engine) RetryWithBackup(ctx context.Context, id int64) error {
+	j, err := e.store.Job(ctx, id)
+	if err != nil {
+		return err
+	}
+	if j.State != Failed || j.FailedIn != Ripping {
+		return fmt.Errorf("job %d didn't fail ripping", id)
+	}
+	j.FailedIn, j.Note, j.Failure, j.Strategy = "", "", keepBundle(j.Failure), Backup
+	return e.move(ctx, j, Ripping, "retry with backup + remux")
 }
 
 // Cancel stops a job. If it is running, its step is interrupted first (an
@@ -437,6 +561,74 @@ func (e *Engine) removeStaging(id int64) {
 	if err := os.RemoveAll(e.StagingDir(id)); err != nil {
 		e.log.Warn("removing staging folder failed", "job", id, "err", err)
 	}
+}
+
+// checkDisc runs Steps.CheckDisc before a rip or a backup, failing the job
+// when the disc changed or can't be checked; it returns the error to stop
+// the step, nil to go on.
+func (e *Engine) checkDisc(ctx context.Context, j *Job) error {
+	err := e.steps.CheckDisc(ctx, j)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrDiscChanged):
+		// The job's disc is gone: retrying it means starting over with a
+		// fresh scan, so it "failed in" Detected.
+		if ferr := e.failIn(ctx, j, Detected, "check disc", err); ferr != nil {
+			return ferr
+		}
+	default:
+		if ferr := e.fail(ctx, j, "check disc", err); ferr != nil {
+			return ferr
+		}
+	}
+	return errStop
+}
+
+// errStop stops a step that has already moved its job (to Failed): Run
+// reads the job again and finds it there.
+var errStop = errors.New("step stopped")
+
+// stalledBefore reports whether the strategy history says the latest
+// Direct rip of j's disc with this MakeMKV version stalled (decisions D66,
+// D71). A history that can't be read says no: Direct is tried.
+func (e *Engine) stalledBefore(ctx context.Context, j *Job) bool {
+	if j.Disc == nil {
+		return false
+	}
+	r, err := e.store.LastResult(ctx, j.Disc.Fingerprint(), e.MakeMKVVersion, Direct)
+	if err != nil {
+		e.log.Warn("reading the strategy history", "job", j.ID, "err", err)
+		return false
+	}
+	return r == AttemptStalled
+}
+
+// record adds an attempt to the strategy history. The history only guides
+// the next disc, so a failure to write it is logged, not the job's.
+func (e *Engine) record(ctx context.Context, j *Job, s Strategy, result string) {
+	if j.Disc == nil {
+		return
+	}
+	a := Attempt{Disc: j.Disc.Fingerprint(), MakeMKV: e.MakeMKVVersion, Strategy: s, Result: result, JobID: j.ID}
+	if err := e.store.RecordAttempt(context.WithoutCancel(ctx), a); err != nil {
+		e.log.Warn("recording a rip attempt", "job", j.ID, "err", err)
+	}
+}
+
+// removeMKVs deletes the MKV files directly in dir, keeping its folders
+// (the backup).
+func removeMKVs(dir string) error {
+	files, err := filepath.Glob(filepath.Join(dir, "*.mkv"))
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		if err := os.Remove(f); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // sameTitles reports whether a and b hold the same titles, in any order.

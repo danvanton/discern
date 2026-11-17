@@ -31,6 +31,11 @@ type Store interface {
 	SetProgress(ctx context.Context, id int64, progress float64) error
 	// Events returns a job's history, oldest first.
 	Events(ctx context.Context, id int64) ([]Event, error)
+	// RecordAttempt adds a rip attempt to the strategy history.
+	RecordAttempt(ctx context.Context, a Attempt) error
+	// LastResult returns the result of the latest attempt with this
+	// strategy on this disc and MakeMKV version, or "" if there was none.
+	LastResult(ctx context.Context, disc, makemkv string, s Strategy) (string, error)
 }
 
 var (
@@ -38,6 +43,9 @@ var (
 	ErrConflict  = errors.New("job changed since it was read")
 	ErrDriveBusy = errors.New("the drive already has an active job")
 	ErrRunning   = errors.New("job is already running")
+	// ErrNoRoom means staging hasn't the space for a backup (decision
+	// D68): the job waits for the user rather than failing.
+	ErrNoRoom = errors.New("not enough free space for backup + remux")
 	// ErrNoMovie means a job was approved before its movie is known. The
 	// import needs one; whoever shows the error says how to choose it.
 	ErrNoMovie = errors.New("the job has no movie yet: the import needs to know which one it is")

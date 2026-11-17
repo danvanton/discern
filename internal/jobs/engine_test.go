@@ -41,6 +41,10 @@ type fakeSteps struct {
 	importDone  func(dir string)    // called by Import
 	onRip       func(func(float64)) // progress reports to send
 	onCheck     func(*jobs.Job)     // called by CheckDisc
+	ripStalls   bool                // Rip returns the watchdog's "stalled"
+	fallbackErr error               // what Fallback returns
+	remuxNote   string              // what Remux returns as its note
+	backupSaw   string              // the folder Backup was given
 }
 
 func (f *fakeSteps) record(step string) error {
@@ -108,7 +112,30 @@ func (f *fakeSteps) Rip(ctx context.Context, j *jobs.Job, dir string, progress f
 	}
 	os.MkdirAll(dir, 0o755)
 	os.WriteFile(filepath.Join(dir, "Sample_t00.mkv"), []byte("rip"), 0o644)
+	if f.ripStalls {
+		f.record("rip")
+		return &makemkv.WatchdogError{Verdict: makemkv.Stalled, Evidence: &makemkv.Evidence{Reason: "output stood still"}}
+	}
 	return f.record("rip")
+}
+func (f *fakeSteps) Fallback(context.Context, *jobs.Job, string) error {
+	f.record("fallback")
+	return f.fallbackErr
+}
+func (f *fakeSteps) Backup(_ context.Context, _ *jobs.Job, dir string, progress func(float64)) error {
+	f.mu.Lock()
+	f.backupSaw = dir
+	f.mu.Unlock()
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "disc.m2ts"), []byte("backup"), 0o644)
+	return f.record("backup")
+}
+func (f *fakeSteps) Remux(_ context.Context, _ *jobs.Job, backupDir, dir string, progress func(float64)) (string, error) {
+	if _, err := os.Stat(filepath.Join(backupDir, "disc.m2ts")); err != nil {
+		return "", errors.New("no backup to remux")
+	}
+	os.WriteFile(filepath.Join(dir, "Sample_t00.mkv"), []byte("remux"), 0o644)
+	return f.remuxNote, f.record("remux")
 }
 func (f *fakeSteps) Verify(context.Context, *jobs.Job, string) error { return f.record("verify") }
 func (f *fakeSteps) Import(_ context.Context, _ *jobs.Job, dir string) error {
@@ -201,13 +228,13 @@ func TestJobWaitsForApprovalThenFinishes(t *testing.T) {
 	if st := e.state(t, j.ID); st != jobs.NeedsYou {
 		t.Fatalf("state = %s, want needs_you", st)
 	}
-	if err := e.engine.Approve(ctx, j.ID, []int{7}, nil, nil); err == nil {
+	if err := e.engine.Approve(ctx, j.ID, []int{7}, nil, nil, jobs.Direct); err == nil {
 		t.Error("approved a title that isn't on the disc")
 	}
-	if err := e.engine.Approve(ctx, j.ID, nil, nil, nil); err == nil {
+	if err := e.engine.Approve(ctx, j.ID, nil, nil, nil, jobs.Direct); err == nil {
 		t.Error("approved no titles")
 	}
-	if err := e.engine.Approve(ctx, j.ID, []int{1}, nil, nil); err != nil {
+	if err := e.engine.Approve(ctx, j.ID, []int{1}, nil, nil, jobs.Direct); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.engine.Run(ctx, j.ID); err != nil {
@@ -288,7 +315,7 @@ func TestWithdrawRacingAnApproval(t *testing.T) {
 			ok, _ := e.engine.Withdraw(ctx, j.ID, "the disc was taken out")
 			withdrawn <- ok
 		}()
-		approveErr := e.engine.Approve(ctx, j.ID, []int{0}, nil, nil)
+		approveErr := e.engine.Approve(ctx, j.ID, []int{0}, nil, nil, jobs.Direct)
 		if approveErr == nil {
 			if err := e.engine.Run(ctx, j.ID); err != nil {
 				t.Fatalf("round %d: the approved job couldn't run: %v", i, err)
@@ -325,7 +352,7 @@ func TestWithdrawLosesToAnEarlierApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	waiting, _ := e.store.Job(ctx, j.ID)
-	if err := e.engine.Approve(ctx, j.ID, []int{0}, nil, nil); err != nil {
+	if err := e.engine.Approve(ctx, j.ID, []int{0}, nil, nil, jobs.Direct); err != nil {
 		t.Fatal(err)
 	}
 	stale := jobs.NewEngine(staleStore{Store: e.store, stale: waiting}, e.steps, e.stage, nil)
@@ -815,7 +842,7 @@ func TestApprovingATrialRecordsAgreement(t *testing.T) {
 		if err := e.engine.Run(ctx, j.ID); err != nil {
 			t.Fatal(err)
 		}
-		if err := e.engine.Approve(ctx, j.ID, c.titles, c.movie, nil); err != nil {
+		if err := e.engine.Approve(ctx, j.ID, c.titles, c.movie, nil, jobs.Direct); err != nil {
 			t.Fatal(err)
 		}
 		got, _ := e.store.Job(ctx, j.ID)
@@ -835,7 +862,7 @@ func TestApprovingATrialRecordsAgreement(t *testing.T) {
 	e := newEnv(t, &fakeSteps{selMovie: movie})
 	j, _ := e.store.CreateJob(ctx, "/dev/sr0")
 	e.engine.Run(ctx, j.ID)
-	e.engine.Approve(ctx, j.ID, []int{0}, nil, nil)
+	e.engine.Approve(ctx, j.ID, []int{0}, nil, nil, jobs.Direct)
 	if got, _ := e.store.Job(ctx, j.ID); got.Selection.Agreed != nil {
 		t.Error("agreement recorded outside a trial")
 	}
@@ -848,11 +875,11 @@ func TestApproveCanCorrectTheMovie(t *testing.T) {
 	e := newEnv(t, &fakeSteps{auto: false})
 	j, _ := e.store.CreateJob(ctx, "/dev/sr0")
 	e.engine.Run(ctx, j.ID)
-	if err := e.engine.Approve(ctx, j.ID, []int{0}, &jobs.Movie{TMDbID: 0}, nil); err == nil {
+	if err := e.engine.Approve(ctx, j.ID, []int{0}, &jobs.Movie{TMDbID: 0}, nil, jobs.Direct); err == nil {
 		t.Error("approved a movie without a TMDb id")
 	}
 	fixed := &jobs.Movie{TMDbID: 559, Title: "Spider-Man 3", Year: 2007}
-	if err := e.engine.Approve(ctx, j.ID, []int{0}, fixed, nil); err != nil {
+	if err := e.engine.Approve(ctx, j.ID, []int{0}, fixed, nil, jobs.Direct); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := e.store.Job(ctx, j.ID); got.Movie == nil || got.Movie.TMDbID != 559 {

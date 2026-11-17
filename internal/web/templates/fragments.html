@@ -16,8 +16,8 @@
     <p class="card-title">{{name .Job}}</p>
     <p class="muted small">{{.Line}}</p>
     <p class="doing">{{doing .Job}}</p>
-    {{if ripping .Job.State}}{{template "progress" .Job.Progress}}{{end}}
-    {{if .Timing.Running}}<p class="muted small">{{minutes .Timing.Elapsed}} in{{if ripping .Job.State}} · {{if .Timing.LeftKnown}}{{left .Timing.Left}} left{{else}}estimating time left{{end}}{{end}}</p>{{end}}
+    {{if copying .Job.State}}{{template "progress" .Job.Progress}}{{end}}
+    {{if .Timing.Running}}<p class="muted small">{{minutes .Timing.Elapsed}} in{{if copying .Job.State}} · {{if .Timing.LeftKnown}}{{left .Timing.Left}} left{{else}}estimating time left{{end}}{{end}}</p>{{end}}
   </div>
 </a>
 {{end}}

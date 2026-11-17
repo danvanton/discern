@@ -36,6 +36,8 @@ export FAKE_MAKEMKVCON='{"info":{"file":"testdata/makemkv/info-demo-small.txt"},
 
 Open http://127.0.0.1:18790 and press **Scan disc**. The demo disc is identified as The Matrix and title 0 is suggested. Press **Rip and import**: the progress bar runs for a few seconds, then the job imports into `dev/library` and shows **In Radarr**. The demo fetches The Matrix's poster from TMDb's image server; offline, the card shows the title's first letter instead.
 
+To try the Backup + remux route as well, build `cmd/fake-mkvmerge`, put it on the `PATH` as `mkvmerge`, and add a `backup` scenario (for example `"backup":{"total_bytes":39845888,"playlists":["00800.mpls"]}`). On the review page, choose **Rip with backup + remux**.
+
 ## Run it with Docker
 
 The image is `ghcr.io/danvanton/discern`, for amd64 and arm64. [`deploy/compose.yaml`](deploy/compose.yaml) is a complete example, and [`deploy/README.md`](deploy/README.md) explains the drive passthrough, the folders and TrueNAS SCALE.
