@@ -53,16 +53,20 @@ func (s *Steps) Fallback(_ context.Context, j *jobs.Job, dir string) error {
 			return fmt.Errorf("title %d isn't from a Blu-ray playlist: only Blu-ray and UHD discs can be backed up and remuxed", idx)
 		}
 	}
-	return room(j, dir)
+	return s.room(j, dir)
 }
 
 // room checks that the staging filesystem holding dir has the space a
 // backup needs (decision D68): the largest the disc could be, since backup
 // copies all of it, plus the chosen titles' MKVs and a margin. It returns
 // an error wrapping jobs.ErrNoRoom that says how much is missing.
-func room(j *jobs.Job, dir string) error {
+func (s *Steps) room(j *jobs.Job, dir string) error {
 	need := backupNeeds(j)
-	free, err := freeSpace(existing(dir))
+	read := s.FreeSpace
+	if read == nil {
+		read = freeSpace
+	}
+	free, err := read(existing(dir))
 	if err != nil {
 		return fmt.Errorf("reading staging's free space: %w", err)
 	}

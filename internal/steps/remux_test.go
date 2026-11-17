@@ -175,11 +175,14 @@ func TestFallback(t *testing.T) {
 	small := &jobs.Job{Titles: []int{0}, Disc: titles(makemkv.Title{Index: 0, SourceFile: "00800.mpls", SizeBytes: 1})}
 	huge := &jobs.Job{Titles: []int{0}, Disc: titles(makemkv.Title{Index: 0, SourceFile: "00800.MPLS", SizeBytes: 1 << 60})}
 	dir := filepath.Join(t.TempDir(), "42") // not created yet
-	if free, _ := freeSpace(existing(dir)); free > 60e9 {
-		if err := s.Fallback(ctx, small, dir); err != nil {
-			t.Errorf("a small disc: %v", err)
-		}
+	if _, err := freeSpace(existing(dir)); err != nil {
+		t.Fatalf("reading the free space: %v", err)
 	}
+	s.FreeSpace = func(string) (int64, error) { return 60e9, nil } // a Blu-ray: 55 GB + the title
+	if err := s.Fallback(ctx, small, dir); err != nil {
+		t.Errorf("a small disc: %v", err)
+	}
+	s.FreeSpace = nil // the system's
 	if err := s.Fallback(ctx, huge, dir); !errors.Is(err, jobs.ErrNoRoom) || !strings.Contains(err.Error(), "free in staging") {
 		t.Errorf("a huge disc: %v", err)
 	}

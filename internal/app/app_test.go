@@ -652,6 +652,8 @@ func fallbackScenario(t *testing.T, w *world) {
 	w.runner.Env = []string{fake.EnvVar + "=" + string(sc)}
 	exe, _ := os.Executable()
 	w.steps.Mkvmerge = exe
+	// The test machine's disk needn't hold a real disc's backup.
+	w.steps.FreeSpace = func(string) (int64, error) { return 1 << 50, nil }
 	t.Setenv(fake.MkvmergeEnvVar, "on")
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -449,17 +450,22 @@ func exitError(op string, err error, msgs []Message, stderr string) error {
 // on Windows the listing's size of a file that is still open for writing can
 // be out of date, which would make a healthy rip look stalled.
 func dirSize(dir string) int64 {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0
-	}
+	// Every file below dir counts: a rip writes one file at the top, but a
+	// backup writes the disc's folders (BDMV/STREAM/...).
 	var total int64
-	for _, e := range entries {
-		info, err := os.Stat(filepath.Join(dir, e.Name()))
-		if err == nil && info.Mode().IsRegular() {
-			total += info.Size()
+	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // a file that went away between listing and reading
 		}
-	}
+		// os.Stat, not d.Info: on Windows the listing's size stays stale
+		// while makemkvcon still has the file open.
+		if d.Type().IsRegular() {
+			if info, err := os.Stat(path); err == nil {
+				total += info.Size()
+			}
+		}
+		return nil
+	})
 	return total
 }
 

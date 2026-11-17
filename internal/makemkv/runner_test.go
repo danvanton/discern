@@ -442,9 +442,16 @@ func TestIncompleteScanErrorCountsAndBoundsMessages(t *testing.T) {
 
 // A backup writes the disc's folder (BDMV with its playlists and streams)
 // into an empty folder, with progress, and returns MakeMKV's messages.
+//
+// The read counter is on, as /proc gives it on Linux, so the watchdog
+// judges stalls: output written into the backup's subfolders must count,
+// or every backup looks stalled.
 func TestBackupHealthy(t *testing.T) {
+	counter := filepath.Join(t.TempDir(), "read-counter")
 	r := testRunner(t, fake.Scenario{Backup: fake.Backup{
-		Mkv: fake.Mkv{TotalBytes: 2 * mib, ChunkDelayMs: 1}, Playlists: []string{"00800.mpls"}}})
+		Mkv:       fake.Mkv{TotalBytes: 8 * mib, ChunkDelayMs: 3, ReadCounterFile: counter},
+		Playlists: []string{"00800.mpls"}}})
+	r.readCounter = counterFileReader(counter)
 	out := filepath.Join(t.TempDir(), "backup")
 	var progress atomic.Int32
 
@@ -455,8 +462,8 @@ func TestBackupHealthy(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(out, "BDMV", "PLAYLIST", "00800.mpls")); err != nil {
 		t.Errorf("no playlist in the backup: %v", err)
 	}
-	if info, err := os.Stat(filepath.Join(out, "BDMV", "STREAM", "00000.m2ts")); err != nil || info.Size() != 2*mib {
-		t.Errorf("stream file: %v, %v; want %d bytes", info, err, 2*mib)
+	if info, err := os.Stat(filepath.Join(out, "BDMV", "STREAM", "00000.m2ts")); err != nil || info.Size() != 8*mib {
+		t.Errorf("stream file: %v, %v; want %d bytes", info, err, 8*mib)
 	}
 	if progress.Load() == 0 || len(msgs) == 0 {
 		t.Errorf("%d progress lines, %d messages", progress.Load(), len(msgs))
@@ -482,5 +489,19 @@ func TestBackupStallAndExitError(t *testing.T) {
 	var ee *ExitError
 	if !errors.As(err, &ee) || ee.Code != 3 || ee.Op != "backup" {
 		t.Errorf("err = %v, want *ExitError from backup with code 3", err)
+	}
+}
+
+// Output is everything below the folder: a backup writes into subfolders.
+func TestDirSizeCountsSubfolders(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "BDMV", "STREAM"), 0o755)
+	os.WriteFile(filepath.Join(dir, "top.mkv"), make([]byte, 10), 0o644)
+	os.WriteFile(filepath.Join(dir, "BDMV", "STREAM", "00000.m2ts"), make([]byte, 32), 0o644)
+	if got := dirSize(dir); got != 42 {
+		t.Errorf("dirSize = %d, want 42", got)
+	}
+	if got := dirSize(filepath.Join(dir, "missing")); got != 0 {
+		t.Errorf("a missing folder: %d", got)
 	}
 }

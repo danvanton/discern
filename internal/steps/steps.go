@@ -66,6 +66,10 @@ type Steps struct {
 	// HasMovie reports whether Radarr already has a file for the movie
 	// (decision D61). New sets it to Radarr's; tests replace it.
 	HasMovie func(ctx context.Context, tmdbID int) (bool, error)
+	// FreeSpace reads the space left on the filesystem holding a folder,
+	// for the backup's room check (decision D68). New sets the system's;
+	// tests replace it.
+	FreeSpace func(dir string) (int64, error)
 	// Mkvmerge is mkvmerge's path, for the Backup + remux strategy; ""
 	// when it isn't installed, and then a backup can't be remuxed.
 	Mkvmerge string
@@ -90,6 +94,7 @@ func New(runner *makemkv.Runner, radarr *importer.Radarr) *Steps {
 	if radarr != nil {
 		s.HasMovie = radarr.HasFile
 	}
+	s.FreeSpace = freeSpace
 	return s
 }
 
