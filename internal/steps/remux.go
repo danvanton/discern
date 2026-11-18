@@ -188,13 +188,16 @@ func (s *Steps) Remux(ctx context.Context, j *jobs.Job, backupDir, dir string, p
 	return remuxNote(j, choice), nil
 }
 
-// remuxNote says when the remux kept more than the language rule asks for
-// (decision D70), only where it could matter: forced-only subtitles when
-// the chosen titles have subtitles in the chosen languages, and dropped
-// commentary when a kept language has more than one audio track (one may
-// be commentary). MakeMKV's scan doesn't mark either for Discern.
+// remuxNote says where the remuxed file differs from a Direct rip, only
+// where it could matter. The remux can't honour forced-only subtitles or
+// dropped commentary (decision D70): MakeMKV's scan doesn't mark either for
+// Discern. Said when the chosen titles have subtitles in the chosen
+// languages, and when a kept language has more than one audio track (one may
+// be commentary). And no subtitle track turns on by itself (decision D73),
+// so forced subtitles for scenes in another language don't show: said
+// whenever subtitles are kept.
 func remuxNote(j *jobs.Job, c *lang.Choice) string {
-	if c == nil || j.Disc == nil {
+	if j.Disc == nil {
 		return ""
 	}
 	subs, audio := map[string]int{}, map[string]int{}
@@ -213,22 +216,34 @@ func remuxNote(j *jobs.Job, c *lang.Choice) string {
 			}
 		}
 	}
-	forced, commentary := false, false
-	for _, l := range canonical(c.Subtitles) {
-		forced = forced || (c.ForcedOnly && subs[l] > 0)
+	// Subtitles are kept as chooseTracks keeps them: every track with no
+	// choice, else the chosen languages and tracks with no language.
+	keptSubs, commentary := false, false
+	for code, n := range subs {
+		keptSubs = keptSubs || (n > 0 && (c == nil || lang.None(code)))
 	}
-	for _, l := range canonical(c.Audio) {
-		commentary = commentary || (!c.Commentary && audio[l] > 1)
+	if c != nil {
+		for _, l := range canonical(c.Subtitles) {
+			keptSubs = keptSubs || subs[l] > 0
+		}
+		for _, l := range canonical(c.Audio) {
+			commentary = commentary || (!c.Commentary && audio[l] > 1)
+		}
 	}
-	switch {
-	case forced && commentary:
-		return "made by backup + remux, which can't pick forced subtitles or tell commentary apart: whole subtitle tracks and every audio track in your languages were kept"
-	case forced:
-		return "made by backup + remux, which can't pick forced subtitles: whole subtitle tracks in your languages were kept"
-	case commentary:
-		return "made by backup + remux, which can't tell commentary apart: every audio track in your languages was kept"
+	var parts []string
+	if keptSubs && c != nil && c.ForcedOnly {
+		parts = append(parts, "it can't pick forced subtitles, so whole subtitle tracks in your languages were kept")
 	}
-	return ""
+	if commentary {
+		parts = append(parts, "it can't tell commentary apart, so every audio track in your languages was kept")
+	}
+	if keptSubs {
+		parts = append(parts, "no subtitles turn on by themselves, forced ones included: turn them on for scenes in another language")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "made by backup + remux: " + strings.Join(parts, "; ")
 }
 
 // bdmvRoot finds the disc folder in a backup: the folder holding BDMV,
@@ -380,6 +395,11 @@ func canonical(codes []string) []string {
 // mkvmerge writes out from src with the chosen audio and subtitle tracks,
 // in the chosen order (video first), reporting progress from mkvmerge's
 // GUI mode. Exit status 1 is a warning: the file is written.
+//
+// Default flags are set on every kept track (decision D73): video and the
+// first audio track are default, the other audio and every subtitle track
+// are not. Without them each track counts as default, and players may turn
+// subtitles on by themselves.
 func (s *Steps) mkvmerge(ctx context.Context, src, out string, tracks []sourceTrack, audio, subs []int, progress func(float64)) error {
 	args := []string{"--gui-mode", "-o", out}
 	if len(audio) > 0 {
@@ -392,14 +412,32 @@ func (s *Steps) mkvmerge(ctx context.Context, src, out string, tracks []sourceTr
 	} else {
 		args = append(args, "--no-subtitles")
 	}
-	var order []string
+	// The kept tracks in output order: video, audio, subtitles. Only the
+	// first video and the first audio track are default (decision D73).
+	type kept struct {
+		id        int
+		isDefault bool
+	}
+	var keep []kept
 	for _, t := range tracks {
 		if t.Type == "video" {
-			order = append(order, "0:"+strconv.Itoa(t.ID))
+			keep = append(keep, kept{t.ID, len(keep) == 0})
 		}
 	}
-	for _, id := range slices.Concat(audio, subs) {
-		order = append(order, "0:"+strconv.Itoa(id))
+	for i, id := range audio {
+		keep = append(keep, kept{id, i == 0})
+	}
+	for _, id := range subs {
+		keep = append(keep, kept{id, false})
+	}
+	var order []string
+	for _, k := range keep {
+		flag := "0"
+		if k.isDefault {
+			flag = "1"
+		}
+		args = append(args, "--default-track-flag", fmt.Sprintf("%d:%s", k.id, flag))
+		order = append(order, fmt.Sprintf("0:%d", k.id))
 	}
 	args = append(args, "--track-order", strings.Join(order, ","), src)
 

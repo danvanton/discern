@@ -3,6 +3,7 @@ package steps
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -82,8 +83,13 @@ func TestRemux(t *testing.T) {
 	if note != "" || last != 1 {
 		t.Errorf("note %q, last progress %v", note, last)
 	}
+	// Video and the first audio track are default, the rest not, so no
+	// subtitles turn on by themselves (decision D73).
 	b, _ := os.ReadFile(log)
-	if args := string(b); !strings.Contains(args, "--audio-tracks 1,2 --subtitle-tracks 4 --track-order 0:0,0:1,0:2,0:4") {
+	want := "--audio-tracks 1,2 --subtitle-tracks 4" +
+		" --default-track-flag 0:1 --default-track-flag 1:1 --default-track-flag 2:0 --default-track-flag 4:0" +
+		" --track-order 0:0,0:1,0:2,0:4"
+	if args := string(b); !strings.Contains(args, want) {
 		t.Errorf("mkvmerge was asked for:\n%s", args)
 	}
 
@@ -115,6 +121,53 @@ func TestRemuxNote(t *testing.T) {
 	}
 	if note := remuxNote(two, &lang.Choice{Audio: []string{"eng"}, Commentary: true}); note != "" {
 		t.Errorf("commentary kept anyway: %q", note)
+	}
+
+	// No subtitle turns on by itself (decision D73): said whenever the remux
+	// keeps one, with or without a language rule; not when it keeps none.
+	subbed := &jobs.Job{Titles: []int{0}, Disc: titles(makemkv.Title{Index: 0, Streams: []makemkv.Stream{{Type: "Audio", Lang: "eng"}, {Type: "Subtitles", Lang: "eng"}}})}
+	for _, c := range []*lang.Choice{c, nil} {
+		if note := remuxNote(subbed, c); !strings.Contains(note, "no subtitles turn on by themselves") {
+			t.Errorf("subtitles kept (choice %v): %q", c, note)
+		}
+	}
+	if note := remuxNote(subbed, &lang.Choice{Audio: []string{"eng"}}); note != "" {
+		t.Errorf("no subtitles kept: %q", note)
+	}
+}
+
+// Only the first video track is default, even when mkvmerge lists more.
+func TestRemuxMarksOneVideoDefault(t *testing.T) {
+	exe, _ := os.Executable()
+	log := filepath.Join(t.TempDir(), "args.log")
+	t.Setenv(fake.MkvmergeEnvVar, log)
+	s := &Steps{Mkvmerge: exe}
+	src := filepath.Join(fakeBackup(t, 10), "BDMV", "PLAYLIST", "00800.mpls")
+	tracks := []sourceTrack{{ID: 0, Type: "video"}, {ID: 1, Type: "video"}, {ID: 2, Type: "audio"}}
+	if err := s.mkvmerge(ctx, src, filepath.Join(t.TempDir(), "out.mkv"), tracks, []int{2}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(log)
+	if want := "--default-track-flag 0:1 --default-track-flag 1:0 --default-track-flag 2:1 --track-order 0:0,0:1,0:2"; !strings.Contains(string(b), want) {
+		t.Errorf("mkvmerge was asked for:\n%s", b)
+	}
+}
+
+// The fake mkvmerge refuses an option or a value the real one wouldn't
+// take, so the remux's arguments are checked by every test that runs it.
+func TestFakeMkvmergeRefusesUnknownOptions(t *testing.T) {
+	src := filepath.Join(fakeBackup(t, 10), "BDMV", "PLAYLIST", "00800.mpls")
+	out := filepath.Join(t.TempDir(), "out.mkv")
+	for _, bad := range [][]string{
+		{"--gui-mode", "-o", out, "--default-track", "0:1", src},
+		{"--gui-mode", "-o", out, "--default-track-flag", "0:yes", src},
+	} {
+		if code := fake.Mkvmerge(bad, io.Discard, io.Discard); code != 2 {
+			t.Errorf("%q: exit %d, want 2", bad, code)
+		}
+	}
+	if code := fake.Mkvmerge([]string{"--gui-mode", "-o", out, "--default-track-flag", "0:1", src}, io.Discard, io.Discard); code != 0 {
+		t.Errorf("a good command: exit %d", code)
 	}
 }
 

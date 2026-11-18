@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -31,6 +32,22 @@ var fileTracks = []map[string]any{
 	{"id": 0, "type": "video", "codec": "HEVC/H.265/MPEG-H", "properties": map[string]any{"language": "und"}},
 	{"id": 1, "type": "audio", "codec": "TrueHD Atmos", "properties": map[string]any{"language": "eng"}},
 	{"id": 2, "type": "subtitles", "codec": "HDMV PGS", "properties": map[string]any{"language": "eng"}},
+}
+
+// writeOptions are the options Discern passes when it writes a file, each
+// with the form of its value (nil: no value), as the image's mkvmerge v92
+// lists them (--default-track-flag <TID[:bool]>, checked in its binary on
+// 2026-11-17). Anything else is refused, so a misspelled option or a wrong
+// value fails a test instead of the first real remux.
+var writeOptions = map[string]*regexp.Regexp{
+	"--gui-mode":           nil,
+	"--no-audio":           nil,
+	"--no-subtitles":       nil,
+	"-o":                   regexp.MustCompile(`.`),
+	"--audio-tracks":       regexp.MustCompile(`^[0-9]+(,[0-9]+)*$`),
+	"--subtitle-tracks":    regexp.MustCompile(`^[0-9]+(,[0-9]+)*$`),
+	"--default-track-flag": regexp.MustCompile(`^[0-9]+:[01]$`),
+	"--track-order":        regexp.MustCompile(`^0:[0-9]+(,0:[0-9]+)*$`),
 }
 
 // Mkvmerge is the fake mkvmerge. It understands the two uses Discern has:
@@ -60,10 +77,23 @@ func Mkvmerge(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	var out string
-	for i, a := range args {
-		if a == "-o" && i+1 < len(args) {
+	for i := 0; i < len(args)-1; i++ { // the last argument is the source
+		value, known := writeOptions[args[i]]
+		if !known {
+			fmt.Fprintf(stderr, "fake mkvmerge: Error: unknown option or argument %q\n", args[i])
+			return 2
+		}
+		if value == nil {
+			continue
+		}
+		if i+1 >= len(args)-1 || !value.MatchString(args[i+1]) {
+			fmt.Fprintf(stderr, "fake mkvmerge: Error: %s needs a value like %s\n", args[i], value)
+			return 2
+		}
+		if args[i] == "-o" {
 			out = args[i+1]
 		}
+		i++
 	}
 	if out == "" || len(args) == 0 {
 		fmt.Fprintln(stderr, "fake mkvmerge: usage: -J <file> | --gui-mode -o <out> ... <source>")
